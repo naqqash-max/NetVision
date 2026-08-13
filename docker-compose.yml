@@ -1,0 +1,99 @@
+services:
+  database:
+    image: postgres:15-alpine
+    container_name: netvision_db
+    environment:
+      POSTGRES_DB: netvision
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: supersecretpassword123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/1-schema.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/2-seed.sql
+    networks:
+      - netvision_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d netvision"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: netvision_backend
+    environment:
+      - DATABASE_URL=postgresql://admin:supersecretpassword123@database:5432/netvision
+      - SECRET_KEY=anothertopsysecretkey9876543210
+      - ACCESS_TOKEN_EXPIRE_MINUTES=60
+    ports:
+      - "8000:8000"
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      - netvision_network
+
+  networking-engine:
+    build:
+      context: ./networking-engine
+      dockerfile: Dockerfile
+    container_name: netvision_networking_engine
+    environment:
+      - DATABASE_URL=postgresql://admin:supersecretpassword123@database:5432/netvision
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      - ./networking-engine:/app
+    # Network monitoring engine may need host network mode or high privileges for ICMP pings
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      - netvision_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: netvision_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - netvision_network
+
+  snmpsim:
+    image: alpine:latest
+    container_name: netvision_snmpsim
+    command: >
+      sh -c "
+      apk add --no-cache net-snmp &&
+      echo 'rocommunity public' > /etc/snmp/snmpd.conf &&
+      echo 'sysLocation Local Office' >> /etc/snmp/snmpd.conf &&
+      echo 'sysContact Admin' >> /etc/snmp/snmpd.conf &&
+      echo 'sysName test-snmp-device' >> /etc/snmp/snmpd.conf &&
+      echo 'sysDescr Simulated SNMP device for NetVision' >> /etc/snmp/snmpd.conf &&
+      snmpd -f -Lo -u root -c /etc/snmp/snmpd.conf udp:1161
+      "
+    ports:
+      - "1161:1161/udp"
+    networks:
+      - netvision_network
+
+volumes:
+  pgdata:
+
+networks:
+  netvision_network:
+    driver: bridge

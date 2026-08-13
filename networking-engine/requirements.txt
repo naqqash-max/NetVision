@@ -1,0 +1,11 @@
+sqlalchemy==2.0.28
+psycopg2-binary==2.9.9
+scapy==2.5.0
+pysnmp-lextudio==5.0.35
+aiosnmp==0.7.2
+python-dotenv==1.0.1
+pydantic==2.6.4
+aioping==0.2.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+
