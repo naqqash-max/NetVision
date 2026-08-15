@@ -1,7 +1,9 @@
 import uuid
 from sqlalchemy import Column, String, Boolean, DateTime, func
+from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
+
 
 class User(Base):
     __tablename__ = "users"
@@ -16,3 +18,7 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     last_login = Column(DateTime(timezone=True), nullable=True)
+    password_changed_at = Column(DateTime(timezone=True), nullable=True)
+
+    reset_tokens = relationship("PasswordResetToken", back_populates="user", cascade="all, delete-orphan")
+

@@ -57,3 +57,28 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: UserResponse
     role: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ForgotPasswordResponse(BaseModel):
+    message: str = "If an account exists for this email, a password reset link has been sent."
+    dev_reset_url: Optional[str] = None
+    dev_token: Optional[str] = None
+    dev_note: Optional[str] = None
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=6, description="Password must be at least 6 characters long")
+    confirm_password: Optional[str] = None
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        if len(v.strip()) < 6:
+            raise ValueError("Password must be at least 6 characters long")
+        return v
+
+class ResetPasswordResponse(BaseModel):
+    message: str
+

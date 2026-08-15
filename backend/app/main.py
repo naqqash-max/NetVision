@@ -1,9 +1,24 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
+from app.core.db import engine, Base
+import app.models  # ensure models are imported for metadata
 from app.api.v1.api import api_router
 
+from sqlalchemy import text
+
+# Create tables and execute lightweight column migrations if missing
+try:
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMP WITH TIME ZONE;"))
+        conn.commit()
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print(f"Database initialization warning: {e}")
+
+
 app = FastAPI(
+
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"

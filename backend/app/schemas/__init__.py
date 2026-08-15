@@ -11,6 +11,13 @@ from app.schemas.topology import TopologyResponse, TopologyNode, TopologyEdge
 from app.schemas.metric import PingLogResponse, DeviceStatusResponse, ManualMonitorResponse, PortLogResponse, PortStatusResponse
 from app.schemas.alert import AlertResponse, AlertSummaryResponse, AlertSettingsResponse, AlertSettingsUpdate
 from app.schemas.user import UserCreate, UserUpdate, UserResponse, UserLogin, TokenResponse
+from app.schemas.analytics import (
+    NocSummaryResponse,
+    IcmpHistoryPoint,
+    TcpHistoryPoint,
+    SnmpHistoryPoint,
+    HistoricalMetricsResponse
+)
 
 __all__ = [
     "DeviceCreate",
@@ -36,5 +43,10 @@ __all__ = [
     "UserUpdate",
     "UserResponse",
     "UserLogin",
-    "TokenResponse"
+    "TokenResponse",
+    "NocSummaryResponse",
+    "IcmpHistoryPoint",
+    "TcpHistoryPoint",
+    "SnmpHistoryPoint",
+    "HistoricalMetricsResponse"
 ]

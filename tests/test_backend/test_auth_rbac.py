@@ -23,7 +23,7 @@ def db_session():
 def test_login_success():
     # Login with email
     response = client.post("/api/v1/auth/login", json={
-        "username_or_email": "admin@netvision.local",
+        "username_or_email": "admin@netvision.com",
         "password": "admin123"
     })
     assert response.status_code == 200
@@ -31,7 +31,7 @@ def test_login_success():
     assert "access_token" in json_data
     assert json_data["token_type"] == "bearer"
     assert json_data["role"] == "ADMIN"
-    assert json_data["user"]["email"] == "admin@netvision.local"
+    assert json_data["user"]["email"] == "admin@netvision.com"
     assert "hashed_password" not in json_data["user"]
 
     # Login with username
@@ -71,7 +71,7 @@ def test_me_endpoint_success():
     # Call /me
     response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
-    assert response.json()["email"] == "admin@netvision.local"
+    assert response.json()["email"] == "admin@netvision.com"
 
 def test_logout_endpoint():
     login_resp = client.post("/api/v1/auth/login", json={
@@ -249,7 +249,7 @@ def test_admin_safeguards():
     for u in test_admin_resp:
         if u["email"] == "test_admin@netvision.com":
             test_admin_id = u["id"]
-        elif u["email"] == "admin@netvision.local":
+        elif u["email"] == "admin@netvision.com":
             default_admin_id = u["id"]
             
     # Attempt to deactivate test_admin (should succeed since default admin is still active admin)

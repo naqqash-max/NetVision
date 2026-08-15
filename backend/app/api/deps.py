@@ -1,3 +1,4 @@
+from datetime import datetime, timezone, timedelta
 from typing import List
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -30,6 +31,7 @@ def get_current_user(
         username_or_email: str = payload.get("sub")
         if username_or_email is None:
             raise credentials_exception
+        iat: int = payload.get("iat")
     except JWTError:
         raise credentials_exception
         
@@ -44,7 +46,16 @@ def get_current_user(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Inactive user"
         )
+
+    # Token Revocation Check: If password was changed after this token was issued
+    if iat and user.password_changed_at:
+        token_issued_at = datetime.fromtimestamp(iat, tz=timezone.utc)
+        if token_issued_at < user.password_changed_at:
+            raise credentials_exception
+
+
     return user
+
 
 class RoleChecker:
     """Enforce specific roles on a FastAPI endpoint."""

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Activity, 
   Layers, 
@@ -23,8 +23,31 @@ import {
   User,
   Mail,
   Lock,
-  UserPlus
+  UserPlus,
+  Search,
+  Filter,
+  ArrowUpDown,
+  TrendingUp,
+  TrendingDown,
+  Gauge,
+  Zap,
+  BarChart2,
+  Calendar
 } from 'lucide-react';
+import { 
+  ResponsiveContainer, 
+  AreaChart, 
+  Area, 
+  LineChart, 
+  Line, 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip as RechartsTooltip, 
+  Legend 
+} from 'recharts';
 
 const BACKEND_URL = 'http://localhost:8000';
 
@@ -43,6 +66,118 @@ function App() {
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState(null);
+
+  // Password Recovery States
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'forgot_password' | 'reset_password'
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState(null);
+  const [forgotDevUrl, setForgotDevUrl] = useState(null);
+  
+  const [resetToken, setResetToken] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState(false);
+  const [resetError, setResetError] = useState(null);
+  const [adminResetSending, setAdminResetSending] = useState(null);
+
+  // Check URL query parameters for reset token on initial mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenParam = params.get('token') || params.get('reset_token');
+    if (tokenParam) {
+      setResetToken(tokenParam);
+      setAuthMode('reset_password');
+    }
+  }, []);
+
+  const handleForgotPasswordSubmit = async (e) => {
+    e.preventDefault();
+    setForgotMessage(null);
+    setForgotDevUrl(null);
+    setForgotLoading(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/v1/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail })
+      });
+      const data = await response.json();
+      setForgotMessage(data.message || "If an account exists for this email, a password reset link has been sent.");
+      if (data.dev_reset_url) {
+        setForgotDevUrl(data.dev_reset_url);
+        if (data.dev_token) {
+          setResetToken(data.dev_token);
+        }
+      }
+    } catch (err) {
+      setForgotMessage("An error occurred while requesting password reset. Please try again.");
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e) => {
+    e.preventDefault();
+    setResetError(null);
+
+    if (resetNewPassword !== resetConfirmPassword) {
+      setResetError("Passwords do not match. Please verify and try again.");
+      return;
+    }
+    if (resetNewPassword.length < 6) {
+      setResetError("Password must be at least 6 characters long.");
+      return;
+    }
+
+    setResetLoading(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/v1/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: resetToken,
+          new_password: resetNewPassword,
+          confirm_password: resetConfirmPassword
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to reset password.");
+      }
+      setResetSuccess(true);
+      showToast("Password has been reset successfully!");
+    } catch (err) {
+      setResetError(err.message);
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleAdminSendPasswordReset = async (targetUser) => {
+    if (!targetUser || !targetUser.id) return;
+    setAdminResetSending(targetUser.id);
+    try {
+      const response = await authFetch(`${BACKEND_URL}/api/v1/users/${targetUser.id}/send-password-reset`, {
+        method: 'POST'
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to send password reset.");
+      }
+      let msg = data.message || `Password reset link sent to ${targetUser.email}`;
+      if (data.dev_reset_url) {
+        msg += ` [Dev Link: ${data.dev_reset_url}]`;
+      }
+      showToast(msg);
+    } catch (err) {
+      showToast(err.message, false);
+    } finally {
+      setAdminResetSending(null);
+    }
+  };
+
 
   // User Management States
   const [usersList, setUsersList] = useState([]);
@@ -274,6 +409,41 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [countdown, setCountdown] = useState(10);
+
+  // NOC Summary & Historical Analytics States
+  const [nocSummary, setNocSummary] = useState({
+    total_devices: 0,
+    online_devices: 0,
+    offline_devices: 0,
+    degraded_devices: 0,
+    active_alerts_count: 0,
+    critical_alerts_count: 0,
+    warning_alerts_count: 0,
+    info_alerts_count: 0,
+    network_health_score: 100.0,
+    avg_latency_ms: null,
+    avg_packet_loss_pct: null
+  });
+  const [nocLoading, setNocLoading] = useState(false);
+
+  const [timeRange, setTimeRange] = useState('1h');
+  const [selectedAnalyticsDevice, setSelectedAnalyticsDevice] = useState('ALL');
+  const [historicalMetrics, setHistoricalMetrics] = useState({
+    time_range: '1h',
+    start_time: '',
+    end_time: '',
+    icmp_metrics: [],
+    tcp_metrics: [],
+    snmp_metrics: []
+  });
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Device Table Search, Filter & Stable Sort States
+  const [deviceSearchTerm, setDeviceSearchTerm] = useState('');
+  const [deviceStatusFilter, setDeviceStatusFilter] = useState('ALL');
+  const [deviceTypeFilter, setDeviceTypeFilter] = useState('ALL');
+  const [deviceSortField, setDeviceSortField] = useState('hostname');
+  const [deviceSortAsc, setDeviceSortAsc] = useState(true);
   
   // Modal States
   const [showAddModal, setShowAddModal] = useState(false);
@@ -420,6 +590,111 @@ function App() {
     }
   };
 
+  // Fetch NOC summary statistics from backend API
+  const fetchNocSummary = async () => {
+    setNocLoading(true);
+    try {
+      const res = await authFetch(`${BACKEND_URL}/api/v1/analytics/noc-summary`);
+      if (res.ok) {
+        const data = await res.json();
+        setNocSummary(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch NOC summary:", err);
+    } finally {
+      setNocLoading(false);
+    }
+  };
+
+  // Fetch real historical time-series metrics for charts
+  const fetchHistoricalMetrics = async (range = timeRange, devId = selectedAnalyticsDevice) => {
+    setHistoryLoading(true);
+    try {
+      let url = `${BACKEND_URL}/api/v1/analytics/history?time_range=${range}`;
+      if (devId && devId !== 'ALL') {
+        url += `&device_id=${devId}`;
+      }
+      const res = await authFetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setHistoricalMetrics(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch historical metrics:", err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  // Stable Sorted & Filtered Device Table List (No layout jittering)
+  const sortedFilteredDevices = useMemo(() => {
+    let result = [...devices];
+
+    if (deviceSearchTerm.trim()) {
+      const term = deviceSearchTerm.toLowerCase();
+      result = result.filter(d => 
+        (d.name && d.name.toLowerCase().includes(term)) ||
+        (d.hostname && d.hostname.toLowerCase().includes(term)) ||
+        (d.ip_address && d.ip_address.includes(term)) ||
+        (d.device_type && d.device_type.toLowerCase().includes(term))
+      );
+    }
+
+    if (deviceStatusFilter !== 'ALL') {
+      result = result.filter(d => d.status === deviceStatusFilter);
+    }
+
+    if (deviceTypeFilter !== 'ALL') {
+      result = result.filter(d => d.device_type === deviceTypeFilter);
+    }
+
+    result.sort((a, b) => {
+      let valA = a[deviceSortField] || '';
+      let valB = b[deviceSortField] || '';
+      if (typeof valA === 'string') valA = valA.toLowerCase();
+      if (typeof valB === 'string') valB = valB.toLowerCase();
+
+      if (valA < valB) return deviceSortAsc ? -1 : 1;
+      if (valA > valB) return deviceSortAsc ? 1 : -1;
+      return 0;
+    });
+
+    return result;
+  }, [devices, deviceSearchTerm, deviceStatusFilter, deviceTypeFilter, deviceSortField, deviceSortAsc]);
+
+  // Process time-series datasets for Recharts charts
+  const formattedIcmpData = useMemo(() => {
+    if (!historicalMetrics || !historicalMetrics.icmp_metrics) return [];
+    return historicalMetrics.icmp_metrics.map(p => ({
+      time: new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      latency: p.latency_ms !== null ? parseFloat(p.latency_ms.toFixed(1)) : null,
+      loss: p.packet_loss_pct,
+      host: p.hostname || p.ip_address || 'Device'
+    }));
+  }, [historicalMetrics]);
+
+  const formattedTcpData = useMemo(() => {
+    if (!historicalMetrics || !historicalMetrics.tcp_metrics) return [];
+    return historicalMetrics.tcp_metrics.map(p => ({
+      time: new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      response_time: p.response_time_ms !== null ? parseFloat(p.response_time_ms.toFixed(1)) : null,
+      port: p.port,
+      host: p.hostname || p.ip_address || 'Device'
+    }));
+  }, [historicalMetrics]);
+
+  const formattedSnmpData = useMemo(() => {
+    if (!historicalMetrics || !historicalMetrics.snmp_metrics) return [];
+    return historicalMetrics.snmp_metrics.map(p => ({
+      time: new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      in_mbps: p.in_rate_bps !== null ? parseFloat((p.in_rate_bps / 1000000).toFixed(2)) : 0,
+      out_mbps: p.out_rate_bps !== null ? parseFloat((p.out_rate_bps / 1000000).toFixed(2)) : 0,
+      cpu: p.cpu_util,
+      mem: p.mem_util,
+      host: p.hostname || p.ip_address || 'Device'
+    }));
+  }, [historicalMetrics]);
+
   // Fetch all devices from database
   const fetchDevices = async () => {
     try {
@@ -430,8 +705,10 @@ function App() {
       const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
       setDevices(sortedData);
       
-      // Refresh alert states
+      // Refresh alert states and NOC summary
       fetchAlertsInfo();
+      fetchNocSummary();
+      fetchHistoricalMetrics();
       
       // Pull recent logs for the overview table for each device
       const logsPromises = data.map(device => 
@@ -855,60 +1132,250 @@ function App() {
             </div>
           </div>
 
-          <form onSubmit={handleLogin} className="flex flex-col gap-4 text-xs mt-2">
-            {loginError && (
-              <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-lg flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                <span>{loginError}</span>
+          {/* FORGOT PASSWORD MODE */}
+          {authMode === 'forgot_password' ? (
+            <div className="flex flex-col gap-5 text-xs">
+              <div className="text-center">
+                <h2 className="text-base font-semibold text-white">Password Recovery</h2>
+                <p className="text-xs text-slate-400 mt-1">Enter your registered email address to receive a password reset link.</p>
               </div>
-            )}
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-slate-400 font-medium">Username or Email</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. admin@netvision.local"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-slate-400 font-medium">Password</label>
-              <input
-                type="password"
-                required
-                placeholder="••••••••"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={authLoading}
-              className="mt-4 bg-brand-primary hover:bg-indigo-500 disabled:opacity-50 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
-            >
-              {authLoading ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  Authenticating...
-                </>
-              ) : (
-                'Secure Log In'
+              {forgotMessage && (
+                <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-xl flex items-start gap-2 font-medium">
+                  <CheckCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <span>{forgotMessage}</span>
+                </div>
               )}
-            </button>
-          </form>
+
+              {forgotDevUrl && (
+                <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs rounded-xl flex flex-col gap-2">
+                  <div className="flex items-center gap-2 font-bold text-amber-400">
+                    <Info className="h-4 w-4" />
+                    <span>[DEVELOPMENT ONLY] Reset Link</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300">SMTP is not configured in development mode. Click below to reset password:</p>
+                  <button
+                    onClick={() => {
+                      setAuthMode('reset_password');
+                    }}
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2 px-3 rounded-lg transition-all text-xs text-center"
+                  >
+                    Open Reset Password Form
+                  </button>
+                </div>
+              )}
+
+              {!forgotMessage && (
+                <form onSubmit={handleForgotPasswordSubmit} className="flex flex-col gap-4 text-xs">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-slate-400 font-medium">Email Address</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="e.g. user@netvision.com"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="mt-2 bg-brand-primary hover:bg-indigo-500 disabled:opacity-50 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    {forgotLoading ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        Sending Request...
+                      </>
+                    ) : (
+                      'Send Reset Link'
+                    )}
+                  </button>
+                </form>
+              )}
+
+              <div className="text-center pt-2 border-t border-brand-border/40">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setForgotMessage(null);
+                    setForgotDevUrl(null);
+                  }}
+                  className="text-slate-400 hover:text-white font-medium transition-colors text-xs inline-flex items-center gap-1"
+                >
+                  ← Return to Login
+                </button>
+              </div>
+            </div>
+          ) : authMode === 'reset_password' ? (
+            /* RESET PASSWORD MODE */
+            <div className="flex flex-col gap-5 text-xs">
+              <div className="text-center">
+                <h2 className="text-base font-semibold text-white">Reset Your Password</h2>
+                <p className="text-xs text-slate-400 mt-1">Enter your new password below (minimum 6 characters).</p>
+              </div>
+
+              {resetError && (
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-xl flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{resetError}</span>
+                </div>
+              )}
+
+              {resetSuccess ? (
+                <div className="flex flex-col gap-4 text-center py-2">
+                  <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-xl flex flex-col items-center gap-2 font-medium">
+                    <CheckCircle className="h-8 w-8 text-emerald-400 animate-bounce" />
+                    <span>Password has been reset successfully!</span>
+                    <p className="text-[11px] text-slate-400 font-normal mt-1">
+                      Your old credentials and active sessions have been revoked. You may now log in with your new password.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('login');
+                      setResetSuccess(false);
+                      setResetNewPassword('');
+                      setResetConfirmPassword('');
+                    }}
+                    className="w-full bg-brand-primary hover:bg-indigo-500 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all text-center"
+                  >
+                    Proceed to Login
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleResetPasswordSubmit} className="flex flex-col gap-4 text-xs">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-slate-400 font-medium">New Password</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      value={resetNewPassword}
+                      onChange={(e) => setResetNewPassword(e.target.value)}
+                      className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-slate-400 font-medium">Confirm New Password</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      value={resetConfirmPassword}
+                      onChange={(e) => setResetConfirmPassword(e.target.value)}
+                      className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={resetLoading}
+                    className="mt-2 bg-brand-primary hover:bg-indigo-500 disabled:opacity-50 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    {resetLoading ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        Updating Password...
+                      </>
+                    ) : (
+                      'Reset Password'
+                    )}
+                  </button>
+
+                  <div className="text-center pt-2 border-t border-brand-border/40">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('login');
+                        setResetError(null);
+                      }}
+                      className="text-slate-400 hover:text-white font-medium transition-colors text-xs inline-flex items-center gap-1"
+                    >
+                      ← Return to Login
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          ) : (
+            /* DEFAULT LOGIN MODE */
+            <form onSubmit={handleLogin} className="flex flex-col gap-4 text-xs mt-2">
+              {loginError && (
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-lg flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-400 font-medium">Username or Email</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. admin@netvision.local"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-400 font-medium">Password</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('forgot_password');
+                      setLoginError(null);
+                    }}
+                    className="text-xs text-brand-primary hover:text-indigo-400 font-medium transition-colors"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="mt-4 bg-brand-primary hover:bg-indigo-500 disabled:opacity-50 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
+              >
+                {authLoading ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Authenticating...
+                  </>
+                ) : (
+                  'Secure Log In'
+                )}
+              </button>
+            </form>
+          )}
         </div>
+
       </div>
     );
   }
 
   const navigationTabs = [
-    { id: 'overview', label: 'Overview', icon: Activity },
+    { id: 'overview', label: 'NOC Overview', icon: Activity },
+    { id: 'analytics', label: 'Historical Analytics', icon: BarChart2 },
     { id: 'devices', label: 'Devices', icon: Server },
     { id: 'topology', label: 'Topology Map', icon: Layers },
     { id: 'alerts', label: 'Alerts Logs', icon: AlertTriangle }
@@ -1008,61 +1475,124 @@ function App() {
       {/* Main Core Layout */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 flex flex-col gap-6">
         
-        {/* Dynamic Metric Cards Grid */}
+        {/* Dynamic NOC Metric Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           
-          <div className="glass-panel glass-panel-hover rounded-xl p-5 flex flex-col justify-between min-h-[120px]">
+          {/* Card 1: Network Health Score (0-100) */}
+          <div className="glass-panel glass-panel-hover rounded-xl p-5 flex flex-col justify-between min-h-[130px] relative overflow-hidden">
+            <div className="flex items-center justify-between z-10">
+              <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">Network Health Score</span>
+              <div className={`p-2 rounded-lg ${
+                nocSummary.network_health_score >= 85 ? 'bg-emerald-500/10 text-emerald-400' :
+                nocSummary.network_health_score >= 60 ? 'bg-amber-500/10 text-amber-400' :
+                'bg-rose-500/10 text-rose-400'
+              }`}>
+                <Gauge className="h-5 w-5" />
+              </div>
+            </div>
+            <div className="mt-3 flex items-end justify-between z-10">
+              <div>
+                <div className="text-3xl font-extrabold tracking-tight text-white font-mono">
+                  {nocSummary.network_health_score !== undefined ? nocSummary.network_health_score.toFixed(1) : '100.0'}
+                  <span className="text-sm font-normal text-slate-400 ml-1">/ 100</span>
+                </div>
+                <div className="text-2xs text-slate-400 mt-1 flex items-center gap-1.5">
+                  <span className={`h-2 w-2 rounded-full ${
+                    nocSummary.network_health_score >= 85 ? 'bg-emerald-400 animate-ping' :
+                    nocSummary.network_health_score >= 60 ? 'bg-amber-400 animate-pulse' :
+                    'bg-rose-500 animate-ping'
+                  }`}></span>
+                  <span className="font-semibold text-slate-300">
+                    {nocSummary.network_health_score >= 85 ? 'System Optimal' :
+                     nocSummary.network_health_score >= 60 ? 'Degraded Performance' :
+                     'Critical Network Issues'}
+                  </span>
+                </div>
+              </div>
+              <span className={`px-2 py-1 rounded-md text-2xs font-bold uppercase ${
+                nocSummary.network_health_score >= 85 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                nocSummary.network_health_score >= 60 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+              }`}>
+                {nocSummary.network_health_score >= 85 ? 'HEALTHY' :
+                 nocSummary.network_health_score >= 60 ? 'WARNING' : 'CRITICAL'}
+              </span>
+            </div>
+            <div className="absolute -bottom-6 -right-6 w-24 h-24 rounded-full opacity-10 blur-xl pointer-events-none bg-brand-primary" />
+          </div>
+
+          {/* Card 2: Device Availability Breakdown */}
+          <div className="glass-panel glass-panel-hover rounded-xl p-5 flex flex-col justify-between min-h-[130px]">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-400 font-medium">Authorized Devices</span>
+              <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">Device Status</span>
               <div className="p-2 rounded-lg bg-slate-800/80 text-brand-primary">
                 <Server className="h-5 w-5" />
               </div>
             </div>
-            <div className="mt-4">
-              <div className="text-2xl font-bold text-white">{totalDevices} Devices</div>
-              <div className="text-xs text-slate-400 mt-1">{authorizedMonitored} enabled for polling</div>
+            <div className="mt-3">
+              <div className="text-3xl font-extrabold text-white font-mono">
+                {nocSummary.total_devices} <span className="text-xs font-normal text-slate-400 font-sans">Nodes</span>
+              </div>
+              <div className="flex items-center gap-2 mt-2 text-3xs font-semibold">
+                <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded">
+                  {nocSummary.online_devices} Online
+                </span>
+                <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded">
+                  {nocSummary.degraded_devices} Degraded
+                </span>
+                <span className="px-2 py-0.5 bg-rose-500/20 text-rose-400 rounded">
+                  {nocSummary.offline_devices} Offline
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="glass-panel glass-panel-hover rounded-xl p-5 flex flex-col justify-between min-h-[120px]">
+          {/* Card 3: Active Alert Statistics */}
+          <div className="glass-panel glass-panel-hover rounded-xl p-5 flex flex-col justify-between min-h-[130px]">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-400 font-medium">Average Latency</span>
-              <div className="p-2 rounded-lg bg-slate-800/80 text-brand-secondary">
-                <Activity className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-4">
-              <div className="text-2xl font-bold text-white">
-                {avgLatencyVal > 0 ? `${avgLatencyVal} ms` : 'N/A'}
-              </div>
-              <div className="text-xs text-slate-400 mt-1">Calculated from online hosts</div>
-            </div>
-          </div>
-
-          <div className="glass-panel glass-panel-hover rounded-xl p-5 flex flex-col justify-between min-h-[120px]">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-400 font-medium">Average Packet Loss</span>
-              <div className="p-2 rounded-lg bg-slate-800/80 text-amber-500">
-                <WifiOff className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-4">
-              <div className="text-2xl font-bold text-white">{avgPacketLossVal}%</div>
-              <div className="text-xs text-slate-400 mt-1">Combined ICMP target loss</div>
-            </div>
-          </div>
-
-          <div className="glass-panel glass-panel-hover rounded-xl p-5 flex flex-col justify-between min-h-[120px]">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-400 font-medium">Active Warnings</span>
-              <div className="p-2 rounded-lg bg-slate-800/80 text-rose-500">
+              <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">Active Alert Statistics</span>
+              <div className="p-2 rounded-lg bg-slate-800/80 text-rose-400">
                 <AlertTriangle className="h-5 w-5 animate-pulse" />
               </div>
             </div>
-            <div className="mt-4">
-              <div className="text-2xl font-bold text-white">{alertSummary.total_active} Alerts</div>
-              <div className="text-xs text-slate-400 mt-1">
-                {alertSummary.critical} critical, {alertSummary.warning} warning
+            <div className="mt-3">
+              <div className="text-3xl font-extrabold text-white font-mono">
+                {nocSummary.active_alerts_count} <span className="text-xs font-normal text-slate-400 font-sans">Active</span>
+              </div>
+              <div className="flex items-center gap-2 mt-2 text-3xs font-semibold">
+                <span className="px-2 py-0.5 bg-rose-500/20 text-rose-400 rounded">
+                  {nocSummary.critical_alerts_count} Critical
+                </span>
+                <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded">
+                  {nocSummary.warning_alerts_count} Warning
+                </span>
+                <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded">
+                  {nocSummary.info_alerts_count} Info
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Network Telemetry Overview */}
+          <div className="glass-panel glass-panel-hover rounded-xl p-5 flex flex-col justify-between min-h-[130px]">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">Latency & Packet Loss</span>
+              <div className="p-2 rounded-lg bg-slate-800/80 text-cyan-400">
+                <Zap className="h-5 w-5" />
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-2xs text-slate-400 font-medium">Avg Latency</div>
+                <div className="text-lg font-bold text-white font-mono mt-0.5">
+                  {nocSummary.avg_latency_ms !== null ? `${nocSummary.avg_latency_ms.toFixed(1)} ms` : 'N/A'}
+                </div>
+              </div>
+              <div>
+                <div className="text-2xs text-slate-400 font-medium">Avg Loss</div>
+                <div className="text-lg font-bold text-white font-mono mt-0.5">
+                  {nocSummary.avg_packet_loss_pct !== null ? `${nocSummary.avg_packet_loss_pct.toFixed(1)}%` : '0%'}
+                </div>
               </div>
             </div>
           </div>
@@ -1110,255 +1640,595 @@ function App() {
 
         {/* Tab Selection Content Router */}
 
-        {/* 1. OVERVIEW TAB */}
+        {/* 1. NOC OVERVIEW TAB */}
         {activeTab === 'overview' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="flex flex-col gap-6">
             
-            {/* Devices Status Overview Table */}
-            <div className="lg:col-span-2 flex flex-col gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
-              <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
-                <div className="flex items-center justify-between border-b border-brand-border pb-4">
-                  <div>
-                    <h3 className="font-semibold text-white text-base">Network Device Status</h3>
-                    <p className="text-xs text-slate-400">Live health of authorized nodes</p>
+              {/* Left Column: Devices Status Overview Table & Recent Logs */}
+              <div className="lg:col-span-2 flex flex-col gap-6">
+                
+                {/* Device Table with Search, Filters & Stable Sorting */}
+                <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-brand-border pb-4 gap-3">
+                    <div>
+                      <h3 className="font-semibold text-white text-base">Network Device Health Status</h3>
+                      <p className="text-xs text-slate-400">Live polling state of authorized infrastructure nodes</p>
+                    </div>
+
+                    {/* Filter and Search Controls */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative">
+                        <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          placeholder="Search nodes..."
+                          value={deviceSearchTerm}
+                          onChange={(e) => setDeviceSearchTerm(e.target.value)}
+                          className="bg-slate-950/80 border border-brand-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-brand-primary w-36 md:w-44"
+                        />
+                      </div>
+
+                      <select
+                        value={deviceStatusFilter}
+                        onChange={(e) => setDeviceStatusFilter(e.target.value)}
+                        className="bg-slate-950/80 border border-brand-border rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-brand-primary cursor-pointer"
+                      >
+                        <option value="ALL">Status: All</option>
+                        <option value="online">Online</option>
+                        <option value="degraded">Degraded</option>
+                        <option value="offline">Offline</option>
+                      </select>
+
+                      <select
+                        value={deviceTypeFilter}
+                        onChange={(e) => setDeviceTypeFilter(e.target.value)}
+                        className="bg-slate-950/80 border border-brand-border rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-brand-primary cursor-pointer"
+                      >
+                        <option value="ALL">Type: All</option>
+                        <option value="router">Router</option>
+                        <option value="switch">Switch</option>
+                        <option value="server">Server</option>
+                        <option value="firewall">Firewall</option>
+                        <option value="iot">IoT</option>
+                      </select>
+                    </div>
                   </div>
-                  <span className="px-3 py-1 bg-brand-primary/10 border border-brand-primary/30 text-brand-primary rounded-full text-xs font-semibold">
-                    Real-time
-                  </span>
+
+                  {loading ? (
+                    <div className="py-12 flex flex-col items-center justify-center gap-3">
+                      <RefreshCw className="h-8 w-8 text-brand-primary animate-spin" />
+                      <span className="text-sm text-slate-400">Polling active network interfaces...</span>
+                    </div>
+                  ) : sortedFilteredDevices.length === 0 ? (
+                    <div className="py-12 flex flex-col items-center justify-center text-center">
+                      <Server className="h-12 w-12 text-slate-600 mb-3" />
+                      <p className="text-sm text-slate-300 font-semibold">No registered devices matching criteria.</p>
+                      <p className="text-xs text-slate-500 mt-1">Adjust search filter or register hardware nodes in Devices tab.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-brand-border/60 text-slate-400 uppercase font-semibold">
+                            <th 
+                              className="py-3 px-2 cursor-pointer hover:text-white transition-colors"
+                              onClick={() => {
+                                if (deviceSortField === 'name') setDeviceSortAsc(!deviceSortAsc);
+                                else { setDeviceSortField('name'); setDeviceSortAsc(true); }
+                              }}
+                            >
+                              <div className="flex items-center gap-1">
+                                Device Name
+                                <ArrowUpDown className="h-3 w-3 opacity-60" />
+                              </div>
+                            </th>
+                            <th 
+                              className="py-3 px-2 cursor-pointer hover:text-white transition-colors"
+                              onClick={() => {
+                                if (deviceSortField === 'ip_address') setDeviceSortAsc(!deviceSortAsc);
+                                else { setDeviceSortField('ip_address'); setDeviceSortAsc(true); }
+                              }}
+                            >
+                              <div className="flex items-center gap-1">
+                                IP Address
+                                <ArrowUpDown className="h-3 w-3 opacity-60" />
+                              </div>
+                            </th>
+                            <th 
+                              className="py-3 px-2 cursor-pointer hover:text-white transition-colors"
+                              onClick={() => {
+                                if (deviceSortField === 'device_type') setDeviceSortAsc(!deviceSortAsc);
+                                else { setDeviceSortField('device_type'); setDeviceSortAsc(true); }
+                              }}
+                            >
+                              <div className="flex items-center gap-1">
+                                Type
+                                <ArrowUpDown className="h-3 w-3 opacity-60" />
+                              </div>
+                            </th>
+                            <th 
+                              className="py-3 px-2 cursor-pointer hover:text-white transition-colors"
+                              onClick={() => {
+                                if (deviceSortField === 'status') setDeviceSortAsc(!deviceSortAsc);
+                                else { setDeviceSortField('status'); setDeviceSortAsc(true); }
+                              }}
+                            >
+                              <div className="flex items-center gap-1">
+                                Status
+                                <ArrowUpDown className="h-3 w-3 opacity-60" />
+                              </div>
+                            </th>
+                            <th className="py-3 px-2">TCP Services</th>
+                            <th className="py-3 px-2 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-brand-border/30">
+                          {sortedFilteredDevices.map((device) => (
+                            <tr key={device.id} className="hover:bg-slate-800/30 transition-colors">
+                              <td className="py-3.5 px-2">
+                                <div 
+                                  className="font-semibold text-slate-200 cursor-pointer hover:text-brand-primary flex items-center gap-1.5"
+                                  onClick={() => openDetailsModal(device)}
+                                >
+                                  {device.name}
+                                  <ChevronRight className="h-3.5 w-3.5 text-slate-500" />
+                                </div>
+                                <div className="text-slate-400 text-3xs">{device.hostname}</div>
+                              </td>
+                              <td className="py-3.5 px-2 font-mono text-slate-300">{device.ip_address}</td>
+                              <td className="py-3.5 px-2 capitalize text-slate-400">{device.device_type}</td>
+                              <td className="py-3.5 px-2">
+                                <span className={`px-2 py-0.5 rounded text-3xs font-bold uppercase tracking-wider ${
+                                  device.status === 'online' ? 'bg-emerald-500/20 text-emerald-400' :
+                                  device.status === 'degraded' ? 'bg-amber-500/20 text-amber-400' :
+                                  'bg-rose-500/20 text-rose-400'
+                                }`}>
+                                  {device.status}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-2">
+                                {device.tcp_ports && device.tcp_ports.length > 0 ? (
+                                  <span 
+                                    onClick={() => openDetailsModal(device)}
+                                    className="text-cyan-400 hover:text-cyan-300 cursor-pointer font-semibold bg-cyan-950/40 border border-cyan-800/30 px-2 py-0.5 rounded text-3xs"
+                                  >
+                                    {device.tcp_ports.length} Monitored
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500 text-3xs">None</span>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-2 text-right">
+                                <button 
+                                  onClick={() => handleManualPing(device.id)}
+                                  disabled={pingingId === device.id}
+                                  className="bg-slate-800 hover:bg-brand-primary text-slate-200 hover:text-white px-3 py-1.5 rounded-lg text-3xs font-semibold shadow transition-all inline-flex items-center gap-1.5 disabled:opacity-50 animate-pulse-slow"
+                                >
+                                  {pingingId === device.id ? (
+                                    <RefreshCw className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Play className="h-3 w-3" />
+                                  )}
+                                  Ping
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
 
-                {loading ? (
-                  <div className="py-12 flex flex-col items-center justify-center gap-3">
-                    <RefreshCw className="h-8 w-8 text-brand-primary animate-spin" />
-                    <span className="text-sm text-slate-400">Polling active network interfaces...</span>
-                  </div>
-                ) : devices.length === 0 ? (
-                  <div className="py-12 flex flex-col items-center justify-center text-center">
-                    <Server className="h-12 w-12 text-slate-600 mb-3" />
-                    <p className="text-sm text-slate-300 font-semibold">No registered devices found.</p>
-                    <p className="text-xs text-slate-500 mt-1">Go to the Devices tab to add and authorize your hardware.</p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="border-b border-brand-border/60 text-slate-400 uppercase font-semibold">
-                          <th className="py-3 px-2">Device Name</th>
-                          <th className="py-3 px-2">IP Address</th>
-                          <th className="py-3 px-2">Type</th>
-                          <th className="py-3 px-2">Status</th>
-                          <th className="py-3 px-2">TCP Services</th>
-                          <th className="py-3 px-2 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-brand-border/30">
-                        {devices.map((device) => (
-                          <tr key={device.id} className="hover:bg-slate-800/30 transition-colors">
-                            <td className="py-3.5 px-2">
-                              <div 
-                                className="font-semibold text-slate-200 cursor-pointer hover:text-brand-primary flex items-center gap-1.5"
-                                onClick={() => openDetailsModal(device)}
-                              >
-                                {device.name}
-                                <ChevronRight className="h-3.5 w-3.5 text-slate-500" />
-                              </div>
-                              <div className="text-slate-400 text-3xs">{device.hostname}</div>
-                            </td>
-                            <td className="py-3.5 px-2 font-mono text-slate-300">{device.ip_address}</td>
-                            <td className="py-3.5 px-2 capitalize text-slate-400">{device.device_type}</td>
-                            <td className="py-3.5 px-2">
-                              <span className={`px-2 py-0.5 rounded text-3xs font-bold uppercase tracking-wider ${
-                                device.status === 'online' ? 'bg-emerald-500/20 text-emerald-400' :
-                                device.status === 'degraded' ? 'bg-amber-500/20 text-amber-400' :
-                                'bg-rose-500/20 text-rose-400'
-                              }`}>
-                                {device.status}
-                              </span>
-                            </td>
-                            <td className="py-3.5 px-2">
-                              {device.tcp_ports && device.tcp_ports.length > 0 ? (
-                                <span 
-                                  onClick={() => openDetailsModal(device)}
-                                  className="text-cyan-400 hover:text-cyan-300 cursor-pointer font-semibold bg-cyan-950/40 border border-cyan-800/30 px-2 py-0.5 rounded text-3xs"
-                                >
-                                  {device.tcp_ports.length} Monitored
-                                </span>
-                              ) : (
-                                <span className="text-slate-500 text-3xs">None</span>
-                              )}
-                            </td>
-                            <td className="py-3.5 px-2 text-right">
-                              <button 
-                                onClick={() => handleManualPing(device.id)}
-                                disabled={pingingId === device.id}
-                                className="bg-slate-800 hover:bg-brand-primary text-slate-200 hover:text-white px-3 py-1.5 rounded-lg text-3xs font-semibold shadow transition-all inline-flex items-center gap-1.5 disabled:opacity-50 animate-pulse-slow"
-                              >
-                                {pingingId === device.id ? (
-                                  <RefreshCw className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Play className="h-3 w-3" />
-                                )}
-                                Ping
-                              </button>
-                            </td>
+                {/* Recent Metric Logs Table */}
+                <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
+                  <h3 className="font-semibold text-white text-base border-b border-brand-border pb-4">Recent Network Telemetry Logs</h3>
+                  {recentLogs.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-slate-500">
+                      No metric snapshots recorded in database yet. Waiting for background polling cycles...
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto max-h-[260px]">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-brand-border/60 text-slate-400 font-semibold uppercase">
+                            <th className="py-2.5 px-2">Timestamp</th>
+                            <th className="py-2.5 px-2">Target Host</th>
+                            <th className="py-2.5 px-2">Avg RTT</th>
+                            <th className="py-2.5 px-2">Loss</th>
+                            <th className="py-2.5 px-2">State</th>
+                            <th className="py-2.5 px-2">Diagnostic Notes</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                        </thead>
+                        <tbody className="divide-y divide-brand-border/30">
+                          {recentLogs.map((log) => {
+                            const dev = devices.find(d => d.id === log.device_id);
+                            return (
+                              <tr key={log.id} className="hover:bg-slate-800/10 text-slate-300">
+                                <td className="py-2.5 px-2 font-mono text-slate-400">{new Date(log.timestamp).toLocaleTimeString()}</td>
+                                <td className="py-2.5 px-2 font-medium">{dev ? dev.name : 'Unknown Device'}</td>
+                                <td className="py-2.5 px-2 font-mono">{log.latency_ms ? `${log.latency_ms.toFixed(1)} ms` : 'N/A'}</td>
+                                <td className="py-2.5 px-2 font-mono">{log.packet_loss_pct}%</td>
+                                <td className="py-2.5 px-2 capitalize">
+                                  <span className={`h-2 w-2 rounded-full inline-block mr-1.5 ${
+                                    log.status === 'online' ? 'bg-emerald-500' :
+                                    log.status === 'degraded' ? 'bg-amber-500' : 'bg-rose-500'
+                                  }`}></span>
+                                  {log.status}
+                                </td>
+                                <td className="py-2.5 px-2 max-w-[200px] truncate text-slate-400">{log.error_msg || 'Ping sequence complete'}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
               </div>
 
-              {/* Recent Metric Logs Table */}
-              <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
-                <h3 className="font-semibold text-white text-base border-b border-brand-border pb-4">Recent Network Events & Latency Log</h3>
-                {recentLogs.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-slate-500">
-                    No metric snapshots recorded in database yet. Waiting for background cron cycles...
+              {/* Right Column: Active Alert Timeline Stream & Services Health */}
+              <div className="flex flex-col gap-6">
+                
+                {/* Real-time Alert Feed / Stream */}
+                <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
+                  <div className="flex items-center justify-between border-b border-brand-border pb-3">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-rose-400 animate-pulse" />
+                      <h3 className="font-semibold text-white text-base">Active Alerts Timeline</h3>
+                    </div>
+                    <span className="px-2 py-0.5 bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded text-3xs font-bold font-mono">
+                      {alerts.filter(a => a.status !== 'RESOLVED').length} Active
+                    </span>
                   </div>
-                ) : (
-                  <div className="overflow-x-auto max-h-[300px]">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="border-b border-brand-border/60 text-slate-400 font-semibold uppercase">
-                          <th className="py-2.5 px-2">Timestamp</th>
-                          <th className="py-2.5 px-2">Target Host</th>
-                          <th className="py-2.5 px-2">Avg RTT</th>
-                          <th className="py-2.5 px-2">Loss</th>
-                          <th className="py-2.5 px-2">State</th>
-                          <th className="py-2.5 px-2">Diagnostic Notes</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-brand-border/30">
-                        {recentLogs.map((log) => {
-                          const dev = devices.find(d => d.id === log.device_id);
-                          return (
-                            <tr key={log.id} className="hover:bg-slate-800/10 text-slate-300">
-                              <td className="py-2.5 px-2 font-mono text-slate-400">{new Date(log.timestamp).toLocaleTimeString()}</td>
-                              <td className="py-2.5 px-2 font-medium">{dev ? dev.name : 'Unknown Device'}</td>
-                              <td className="py-2.5 px-2 font-mono">{log.latency_ms ? `${log.latency_ms.toFixed(1)} ms` : 'N/A'}</td>
-                              <td className="py-2.5 px-2 font-mono">{log.packet_loss_pct}%</td>
-                              <td className="py-2.5 px-2 capitalize">
-                                <span className={`h-2 w-2 rounded-full inline-block mr-1.5 ${
-                                  log.status === 'online' ? 'bg-emerald-500' :
-                                  log.status === 'degraded' ? 'bg-amber-500' : 'bg-rose-500'
-                                }`}></span>
-                                {log.status}
-                              </td>
-                              <td className="py-2.5 px-2 max-w-[200px] truncate text-slate-400">{log.error_msg || 'Ping sequence complete'}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
 
+                  {alerts.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-slate-500 flex flex-col items-center gap-2">
+                      <CheckCircle className="h-8 w-8 text-emerald-400/60" />
+                      <span>No active warnings or network alarms recorded.</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-3 max-h-[380px] overflow-y-auto pr-1">
+                      {alerts.slice(0, 10).map((alert) => (
+                        <div key={alert.id} className="p-3 bg-slate-900/60 rounded-xl border border-slate-800 flex flex-col gap-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2 py-0.5 rounded text-3xs font-bold uppercase ${
+                                alert.severity === 'CRITICAL' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' :
+                                alert.severity === 'WARNING' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                                'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                              }`}>
+                                {alert.severity}
+                              </span>
+                              <span className="text-2xs text-slate-400 font-mono">
+                                {new Date(alert.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            
+                            <span className={`text-3xs font-semibold px-2 py-0.5 rounded ${
+                              alert.status === 'RESOLVED' ? 'bg-emerald-500/20 text-emerald-400' :
+                              alert.status === 'ACKNOWLEDGED' ? 'bg-indigo-500/20 text-indigo-400' :
+                              'bg-rose-500/20 text-rose-400 animate-pulse'
+                            }`}>
+                              {alert.status}
+                            </span>
+                          </div>
+
+                          <div className="text-xs font-semibold text-white">{alert.title}</div>
+                          <p className="text-2xs text-slate-300 leading-relaxed">{alert.message}</p>
+
+                          {/* RBAC-aware Alert Actions */}
+                          {hasOperatorRights && alert.status !== 'RESOLVED' && (
+                            <div className="flex items-center gap-2 mt-1 pt-2 border-t border-slate-800/80">
+                              {alert.status === 'OPEN' && (
+                                <button
+                                  onClick={() => handleAcknowledgeAlert(alert.id)}
+                                  className="px-2.5 py-1 bg-indigo-600/80 hover:bg-indigo-500 text-white rounded text-3xs font-semibold transition-all"
+                                >
+                                  Acknowledge
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleResolveAlert(alert.id)}
+                                className="px-2.5 py-1 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded text-3xs font-semibold transition-all"
+                              >
+                                Resolve
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Monitoring Engine Services Status */}
+                <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
+                  <h3 className="font-semibold text-white text-base border-b border-brand-border pb-3">Services Engine Health</h3>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-slate-800">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg">
+                          <Server className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-200">PostgreSQL DB Engine</h4>
+                          <p className="text-2xs text-slate-400 mt-0.5 font-mono">Port 5432</p>
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded text-3xs font-semibold uppercase tracking-wider">
+                        ONLINE
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-slate-800">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 bg-cyan-500/10 text-cyan-400 rounded-lg">
+                          <Activity className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-200">ICMP & TCP Poller</h4>
+                          <p className="text-2xs text-slate-400 mt-0.5 font-mono">Async Background Cron</p>
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded text-3xs font-semibold uppercase tracking-wider">
+                        ACTIVE
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
             </div>
 
-            {/* Right Information Column */}
-            <div className="flex flex-col gap-6">
-              
-              {/* Monitoring Engine Services Health */}
-              <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
-                <h3 className="font-semibold text-white text-base border-b border-brand-border pb-3">Services Status</h3>
-                <div className="flex flex-col gap-4">
-                  <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-slate-800">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg">
-                        <Server className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-semibold text-slate-200">PostgreSQL DB</h4>
-                        <p className="text-2xs text-slate-400 mt-0.5">Port 5432</p>
-                      </div>
-                    </div>
-                    <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded text-3xs font-semibold uppercase tracking-wider">
-                      online
-                    </span>
-                  </div>
+          </div>
+        )}
 
-                  <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-slate-800">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-cyan-500/10 text-cyan-400 rounded-lg">
-                        <Activity className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-semibold text-slate-200">Networking Poller</h4>
-                        <p className="text-2xs text-slate-400 mt-0.5">Background Daemon</p>
-                      </div>
-                    </div>
-                    <span className={`px-2 py-0.5 border rounded text-3xs font-semibold uppercase tracking-wider ${
-                      totalDevices > 0 
-                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                    }`}>
-                      {totalDevices > 0 ? 'active' : 'idle'}
-                    </span>
-                  </div>
+        {/* 2. HISTORICAL ANALYTICS TAB */}
+        {activeTab === 'analytics' && (
+          <div className="flex flex-col gap-6">
+            <div className="flex items-center justify-between border-b border-brand-border pb-4">
+              <div>
+                <h3 className="font-semibold text-white text-base">Historical Network Telemetry & Performance Analytics</h3>
+                <p className="text-xs text-slate-400">Time-series analytics for ICMP latency, packet loss, TCP port response, and SNMP bandwidth</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-2xs text-slate-400 font-mono">Time Window: {timeRange}</span>
+              </div>
+            </div>
 
-                  <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-slate-800">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-purple-500/10 text-purple-400 rounded-lg">
-                        <Terminal className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-semibold text-slate-200">FastAPI API Server</h4>
-                        <p className="text-2xs text-slate-400 mt-0.5">Port 8000</p>
-                      </div>
-                    </div>
-                    <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded text-3xs font-semibold uppercase tracking-wider">
-                      online
-                    </span>
-                  </div>
+            {/* Time-Range Selector Bar */}
+            <div className="glass-panel rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <Calendar className="h-4 w-4 text-brand-primary" />
+                <span className="text-xs font-semibold text-white">Select Time Range:</span>
+                <div className="flex items-center bg-slate-950/80 p-1 rounded-lg border border-brand-border/60">
+                  {['15m', '1h', '6h', '24h', '7d'].map((range) => (
+                    <button
+                      key={range}
+                      onClick={() => {
+                        setTimeRange(range);
+                        fetchHistoricalMetrics(range, selectedAnalyticsDevice);
+                      }}
+                      className={`px-3 py-1.5 text-2xs font-semibold rounded-md transition-all ${
+                        timeRange === range
+                          ? 'bg-brand-primary text-white shadow-md'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                      }`}
+                    >
+                      {range === '15m' ? '15 Minutes' :
+                       range === '1h' ? '1 Hour' :
+                       range === '6h' ? '6 Hours' :
+                       range === '24h' ? '24 Hours' : '7 Days'}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Status Breakdown Panel */}
-              <div className="glass-panel rounded-xl p-6 flex flex-col gap-4">
-                <h3 className="font-semibold text-white text-base border-b border-brand-border pb-3">Device Status Share</h3>
-                <div className="flex flex-col gap-3">
-                  <div>
-                    <div className="flex justify-between text-xs text-slate-400 mb-1">
-                      <span>Online ({onlineDevices.length})</span>
-                      <span>{totalDevices > 0 ? ((onlineDevices.length / totalDevices) * 100).toFixed(0) : 0}%</span>
-                    </div>
-                    <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-emerald-500 rounded-full transition-all duration-500" 
-                        style={{ width: `${totalDevices > 0 ? (onlineDevices.length / totalDevices) * 100 : 0}%` }}
-                      ></div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between text-xs text-slate-400 mb-1">
-                      <span>Degraded ({degradedDevices.length})</span>
-                      <span>{totalDevices > 0 ? ((degradedDevices.length / totalDevices) * 100).toFixed(0) : 0}%</span>
-                    </div>
-                    <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-amber-500 rounded-full transition-all duration-500" 
-                        style={{ width: `${totalDevices > 0 ? (degradedDevices.length / totalDevices) * 100 : 0}%` }}
-                      ></div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between text-xs text-slate-400 mb-1">
-                      <span>Offline ({offlineDevices.length})</span>
-                      <span>{totalDevices > 0 ? ((offlineDevices.length / totalDevices) * 100).toFixed(0) : 0}%</span>
-                    </div>
-                    <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-rose-500 rounded-full transition-all duration-500" 
-                        style={{ width: `${totalDevices > 0 ? (offlineDevices.length / totalDevices) * 100 : 0}%` }}
-                      ></div>
-                    </div>
-                  </div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 text-xs">
+                  <Filter className="h-4 w-4 text-slate-400" />
+                  <span className="text-slate-400 font-medium">Filter Device:</span>
+                  <select
+                    value={selectedAnalyticsDevice}
+                    onChange={(e) => {
+                      const devId = e.target.value;
+                      setSelectedAnalyticsDevice(devId);
+                      fetchHistoricalMetrics(timeRange, devId);
+                    }}
+                    className="bg-slate-950/80 border border-brand-border rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-brand-primary cursor-pointer"
+                  >
+                    <option value="ALL">All Network Infrastructure</option>
+                    {devices.map(d => (
+                      <option key={d.id} value={d.id}>{d.name} ({d.ip_address})</option>
+                    ))}
+                  </select>
                 </div>
+
+                <button
+                  onClick={() => fetchHistoricalMetrics(timeRange, selectedAnalyticsDevice)}
+                  disabled={historyLoading}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition-all disabled:opacity-50"
+                  title="Refresh analytics data"
+                >
+                  <RefreshCw className={`h-4 w-4 ${historyLoading ? 'animate-spin text-brand-primary' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* 2x2 Grid of Time-Series Charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* Chart 1: ICMP Latency History */}
+              <div className="glass-panel rounded-xl p-5 flex flex-col gap-4">
+                <div className="flex items-center justify-between border-b border-brand-border/60 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-brand-primary" />
+                    <h4 className="text-sm font-semibold text-white">ICMP Ping Latency (ms)</h4>
+                  </div>
+                  <span className="text-3xs text-slate-400 font-mono">Range: {timeRange}</span>
+                </div>
+
+                {historyLoading ? (
+                  <div className="h-[240px] flex flex-col items-center justify-center gap-2 text-slate-400">
+                    <RefreshCw className="h-6 w-6 animate-spin text-brand-primary" />
+                    <span className="text-xs">Loading telemetry records...</span>
+                  </div>
+                ) : formattedIcmpData.length === 0 ? (
+                  <div className="h-[240px] flex flex-col items-center justify-center text-center text-slate-500">
+                    <Activity className="h-8 w-8 mb-2 opacity-40" />
+                    <p className="text-xs">No ICMP ping snapshots found for selected range.</p>
+                  </div>
+                ) : (
+                  <div className="h-[240px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={formattedIcmpData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="latencyGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4}/>
+                            <stop offset="95%" stopColor="#6366f1" stopOpacity={0.0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="time" stroke="#64748b" fontSize={10} />
+                        <YAxis stroke="#64748b" fontSize={10} unit="ms" />
+                        <RechartsTooltip 
+                          contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '8px', fontSize: '11px' }}
+                          itemStyle={{ color: '#818cf8' }}
+                        />
+                        <Area type="monotone" dataKey="latency" name="Latency (ms)" stroke="#6366f1" strokeWidth={2} fillOpacity={1} fill="url(#latencyGrad)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+
+              {/* Chart 2: Packet Loss Percentage */}
+              <div className="glass-panel rounded-xl p-5 flex flex-col gap-4">
+                <div className="flex items-center justify-between border-b border-brand-border/60 pb-3">
+                  <div className="flex items-center gap-2">
+                    <WifiOff className="h-4 w-4 text-amber-400" />
+                    <h4 className="text-sm font-semibold text-white">ICMP Packet Loss (%)</h4>
+                  </div>
+                  <span className="text-3xs text-slate-400 font-mono">Range: {timeRange}</span>
+                </div>
+
+                {historyLoading ? (
+                  <div className="h-[240px] flex flex-col items-center justify-center gap-2 text-slate-400">
+                    <RefreshCw className="h-6 w-6 animate-spin text-amber-400" />
+                    <span className="text-xs">Loading loss metrics...</span>
+                  </div>
+                ) : formattedIcmpData.length === 0 ? (
+                  <div className="h-[240px] flex flex-col items-center justify-center text-center text-slate-500">
+                    <WifiOff className="h-8 w-8 mb-2 opacity-40" />
+                    <p className="text-xs">No packet loss data recorded.</p>
+                  </div>
+                ) : (
+                  <div className="h-[240px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={formattedIcmpData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="time" stroke="#64748b" fontSize={10} />
+                        <YAxis stroke="#64748b" fontSize={10} unit="%" domain={[0, 100]} />
+                        <RechartsTooltip 
+                          contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '8px', fontSize: '11px' }}
+                          itemStyle={{ color: '#f59e0b' }}
+                        />
+                        <Bar dataKey="loss" name="Packet Loss (%)" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+
+              {/* Chart 3: TCP Port Response Times */}
+              <div className="glass-panel rounded-xl p-5 flex flex-col gap-4">
+                <div className="flex items-center justify-between border-b border-brand-border/60 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-cyan-400" />
+                    <h4 className="text-sm font-semibold text-white">TCP Port Response Time (ms)</h4>
+                  </div>
+                  <span className="text-3xs text-slate-400 font-mono">Range: {timeRange}</span>
+                </div>
+
+                {historyLoading ? (
+                  <div className="h-[240px] flex flex-col items-center justify-center gap-2 text-slate-400">
+                    <RefreshCw className="h-6 w-6 animate-spin text-cyan-400" />
+                    <span className="text-xs">Loading TCP port logs...</span>
+                  </div>
+                ) : formattedTcpData.length === 0 ? (
+                  <div className="h-[240px] flex flex-col items-center justify-center text-center text-slate-500">
+                    <Zap className="h-8 w-8 mb-2 opacity-40" />
+                    <p className="text-xs">No TCP port response snapshots recorded for range.</p>
+                  </div>
+                ) : (
+                  <div className="h-[240px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={formattedTcpData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="time" stroke="#64748b" fontSize={10} />
+                        <YAxis stroke="#64748b" fontSize={10} unit="ms" />
+                        <RechartsTooltip 
+                          contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '8px', fontSize: '11px' }}
+                          itemStyle={{ color: '#22d3ee' }}
+                        />
+                        <Line type="monotone" dataKey="response_time" name="Response Time (ms)" stroke="#06b6d4" strokeWidth={2} dot={{ r: 3 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+
+              {/* Chart 4: SNMP Interface Traffic & Resources */}
+              <div className="glass-panel rounded-xl p-5 flex flex-col gap-4">
+                <div className="flex items-center justify-between border-b border-brand-border/60 pb-3">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-emerald-400" />
+                    <h4 className="text-sm font-semibold text-white">SNMP Interface Traffic (Mbps)</h4>
+                  </div>
+                  <span className="text-3xs text-slate-400 font-mono">Range: {timeRange}</span>
+                </div>
+
+                {historyLoading ? (
+                  <div className="h-[240px] flex flex-col items-center justify-center gap-2 text-slate-400">
+                    <RefreshCw className="h-6 w-6 animate-spin text-emerald-400" />
+                    <span className="text-xs">Loading SNMP telemetry...</span>
+                  </div>
+                ) : formattedSnmpData.length === 0 ? (
+                  <div className="h-[240px] flex flex-col items-center justify-center text-center text-slate-500">
+                    <TrendingUp className="h-8 w-8 mb-2 opacity-40" />
+                    <p className="text-xs">No SNMP traffic records found for range.</p>
+                  </div>
+                ) : (
+                  <div className="h-[240px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={formattedSnmpData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="snmpInGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0.0}/>
+                          </linearGradient>
+                          <linearGradient id="snmpOutGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4}/>
+                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="time" stroke="#64748b" fontSize={10} />
+                        <YAxis stroke="#64748b" fontSize={10} unit="M" />
+                        <RechartsTooltip 
+                          contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '8px', fontSize: '11px' }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '5px' }} />
+                        <Area type="monotone" dataKey="in_mbps" name="Inbound (Mbps)" stroke="#10b981" fillOpacity={1} fill="url(#snmpInGrad)" />
+                        <Area type="monotone" dataKey="out_mbps" name="Outbound (Mbps)" stroke="#3b82f6" fillOpacity={1} fill="url(#snmpOutGrad)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </div>
 
             </div>
@@ -1983,6 +2853,19 @@ function App() {
                           <td className="py-3 px-3 text-right">
                             <div className="flex items-center justify-end gap-1.5">
                               <button 
+                                onClick={() => handleAdminSendPasswordReset(targetUser)}
+                                disabled={adminResetSending === targetUser.id}
+                                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-indigo-900/60 text-slate-300 hover:text-indigo-300 disabled:opacity-30 transition-all border border-brand-border flex items-center gap-1 text-[11px]"
+                                title="Send password reset link to user"
+                              >
+                                {adminResetSending === targetUser.id ? (
+                                  <RefreshCw className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Mail className="h-3 w-3" />
+                                )}
+                                <span>Reset Link</span>
+                              </button>
+                              <button 
                                 onClick={() => openEditUserModal(targetUser)}
                                 className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all"
                                 title="Edit user settings"
@@ -1998,6 +2881,7 @@ function App() {
                                 <Trash2 className="h-3.5 w-3.5" />
                               </button>
                             </div>
+
                           </td>
                         </tr>
                       ))}

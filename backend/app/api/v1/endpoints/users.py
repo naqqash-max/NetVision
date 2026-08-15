@@ -197,3 +197,66 @@ def delete_user(
         ip_address=client_ip
     )
     return None
+
+@router.post("/{id}/send-password-reset")
+def admin_send_password_reset(
+    request: Request,
+    id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Initiate a password reset for a user without seeing or knowing their password (ADMIN only)."""
+    from datetime import datetime, timezone, timedelta
+    from app.core.config import settings
+    from app.core.security import generate_reset_token, hash_reset_token
+    from app.models.password_reset import PasswordResetToken
+    from app.services.email import send_password_reset_email
+
+    user = db.query(User).filter(User.id == id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    client_ip = request.client.host if request.client else None
+    now = datetime.now(timezone.utc)
+    
+    # Invalidate previous unused reset tokens for target user
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used_at.is_(None)
+    ).update({"used_at": now}, synchronize_session=False)
+
+    # Generate token & hash
+    raw_token = generate_reset_token()
+    token_hash = hash_reset_token(raw_token)
+    expires_at = now + timedelta(minutes=settings.RESET_TOKEN_EXPIRE_MINUTES)
+
+    reset_token_obj = PasswordResetToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=expires_at
+    )
+    db.add(reset_token_obj)
+    db.commit()
+
+    dev_info = send_password_reset_email(email=user.email, reset_token=raw_token)
+    dev_url = dev_info["reset_url"]
+
+    # Audit log event
+    log_audit_event(
+        db=db,
+        action="admin_password_reset_initiated",
+        user=current_user,
+        details={"target_user_id": str(user.id), "target_email": user.email},
+        ip_address=client_ip
+    )
+
+    response_data = {
+        "message": f"Password reset link successfully sent to {user.email}."
+    }
+    if settings.ENVIRONMENT == "development" and not settings.SMTP_HOST and dev_url:
+        response_data["dev_reset_url"] = dev_url
+        response_data["dev_token"] = raw_token
+        response_data["dev_note"] = "[DEVELOPMENT ONLY] SMTP not configured. Reset link provided for development."
+
+    return response_data
+
