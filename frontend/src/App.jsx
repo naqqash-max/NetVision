@@ -32,7 +32,11 @@ import {
   Gauge,
   Zap,
   BarChart2,
-  Calendar
+  Calendar,
+  FileText,
+  Download,
+  FileSpreadsheet,
+  Printer
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -438,6 +442,22 @@ function App() {
   });
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  // Reports Module States
+  const [reportType, setReportType] = useState('network-health');
+  const [reportTimeRange, setReportTimeRange] = useState('24h');
+  const [reportCustomStart, setReportCustomStart] = useState('');
+  const [reportCustomEnd, setReportCustomEnd] = useState('');
+  const [reportDeviceId, setReportDeviceId] = useState('ALL');
+  const [reportDeviceType, setReportDeviceType] = useState('ALL');
+  const [reportStatus, setReportStatus] = useState('ALL');
+  const [reportSeverity, setReportSeverity] = useState('ALL');
+  const [reportAlertType, setReportAlertType] = useState('ALL');
+  const [reportPort, setReportPort] = useState('');
+  const [reportData, setReportData] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportExporting, setReportExporting] = useState(false);
+  const [reportError, setReportError] = useState(null);
+
   // Device Table Search, Filter & Stable Sort States
   const [deviceSearchTerm, setDeviceSearchTerm] = useState('');
   const [deviceStatusFilter, setDeviceStatusFilter] = useState('ALL');
@@ -625,6 +645,110 @@ function App() {
       setHistoryLoading(false);
     }
   };
+
+  // Fetch structured report from backend API
+  const fetchReportData = async (typeToFetch = reportType) => {
+    setReportLoading(true);
+    setReportError(null);
+    try {
+      let url = `${BACKEND_URL}/api/v1/reports/${typeToFetch}?time_range=${reportTimeRange}`;
+      if (reportTimeRange === 'custom' && reportCustomStart && reportCustomEnd) {
+        url += `&start_time=${encodeURIComponent(new Date(reportCustomStart).toISOString())}&end_time=${encodeURIComponent(new Date(reportCustomEnd).toISOString())}`;
+      }
+      if (reportDeviceId && reportDeviceId !== 'ALL') {
+        url += `&device_id=${reportDeviceId}`;
+      }
+      if (reportDeviceType && reportDeviceType !== 'ALL') {
+        url += `&device_type=${reportDeviceType}`;
+      }
+      if (reportStatus && reportStatus !== 'ALL') {
+        url += `&status=${reportStatus}`;
+      }
+      if (reportSeverity && reportSeverity !== 'ALL') {
+        url += `&severity=${reportSeverity}`;
+      }
+      if (reportAlertType && reportAlertType !== 'ALL') {
+        url += `&alert_type=${encodeURIComponent(reportAlertType)}`;
+      }
+      if (typeToFetch === 'tcp' && reportPort) {
+        url += `&port=${reportPort}`;
+      }
+
+      const res = await authFetch(url);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(errData.detail || "Failed to generate report");
+      }
+      const data = await res.json();
+      setReportData(data);
+    } catch (err) {
+      console.error("Report generation failed:", err);
+      setReportError(err.message);
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  // Export report to CSV or PDF via backend endpoint
+  const handleExportReport = async (exportFormat) => {
+    setReportExporting(exportFormat);
+    try {
+      let url = `${BACKEND_URL}/api/v1/reports/${reportType}/${exportFormat}?time_range=${reportTimeRange}`;
+      if (reportTimeRange === 'custom' && reportCustomStart && reportCustomEnd) {
+        url += `&start_time=${encodeURIComponent(new Date(reportCustomStart).toISOString())}&end_time=${encodeURIComponent(new Date(reportCustomEnd).toISOString())}`;
+      }
+      if (reportDeviceId && reportDeviceId !== 'ALL') {
+        url += `&device_id=${reportDeviceId}`;
+      }
+      if (reportDeviceType && reportDeviceType !== 'ALL') {
+        url += `&device_type=${reportDeviceType}`;
+      }
+      if (reportStatus && reportStatus !== 'ALL') {
+        url += `&status=${reportStatus}`;
+      }
+      if (reportSeverity && reportSeverity !== 'ALL') {
+        url += `&severity=${reportSeverity}`;
+      }
+      if (reportAlertType && reportAlertType !== 'ALL') {
+        url += `&alert_type=${encodeURIComponent(reportAlertType)}`;
+      }
+      if (reportType === 'tcp' && reportPort) {
+        url += `&port=${reportPort}`;
+      }
+
+      const token = localStorage.getItem('token');
+      const res = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!res.ok) throw new Error("Failed to export report document");
+
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `netvision_${reportType}_report.${exportFormat}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+
+      showToast(`Report exported successfully as ${exportFormat.toUpperCase()}!`);
+    } catch (err) {
+      showToast(err.message, false);
+    } finally {
+      setReportExporting(false);
+    }
+  };
+
+  // Automatically fetch report when Reports tab is activated
+  useEffect(() => {
+    if (activeTab === 'reports') {
+      fetchReportData(reportType);
+    }
+  }, [activeTab]);
 
   // Stable Sorted & Filtered Device Table List (No layout jittering)
   const sortedFilteredDevices = useMemo(() => {
@@ -1376,6 +1500,7 @@ function App() {
   const navigationTabs = [
     { id: 'overview', label: 'NOC Overview', icon: Activity },
     { id: 'analytics', label: 'Historical Analytics', icon: BarChart2 },
+    { id: 'reports', label: 'Reports', icon: FileText },
     { id: 'devices', label: 'Devices', icon: Server },
     { id: 'topology', label: 'Topology Map', icon: Layers },
     { id: 'alerts', label: 'Alerts Logs', icon: AlertTriangle }
@@ -2235,7 +2360,559 @@ function App() {
           </div>
         )}
 
-        {/* 2. DEVICES TAB */}
+        {/* 3. REPORTS & DATA EXPORT TAB */}
+        {activeTab === 'reports' && (
+          <div className="flex flex-col gap-6">
+            <div className="flex items-center justify-between border-b border-brand-border pb-4">
+              <div>
+                <h3 className="font-semibold text-white text-base">Enterprise Network Reports & Data Export</h3>
+                <p className="text-xs text-slate-400">Generate structured performance reports, device availability audits, and incident logs with CSV/PDF export</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-md text-2xs font-semibold uppercase tracking-wider font-mono">
+                  {reportType.toUpperCase().replace('-', ' ')}
+                </span>
+              </div>
+            </div>
+
+            {/* Reports Control Panel & Filters */}
+            <div className="glass-panel rounded-xl p-5 flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                
+                {/* 1. Report Selector */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <FileText className="h-3.5 w-3.5 text-brand-primary" />
+                    Report Type
+                  </label>
+                  <select
+                    value={reportType}
+                    onChange={(e) => {
+                      const newType = e.target.value;
+                      setReportType(newType);
+                      fetchReportData(newType);
+                    }}
+                    className="bg-slate-950/80 border border-brand-border rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-brand-primary cursor-pointer font-medium"
+                  >
+                    <option value="network-health">1. Network Health Report</option>
+                    <option value="device-availability">2. Device Availability Report</option>
+                    <option value="alerts">3. Alert / Incident Report</option>
+                    <option value="icmp">4. ICMP Performance Report</option>
+                    <option value="tcp">5. TCP Service Report</option>
+                    <option value="snmp">6. SNMP Interface Traffic Report</option>
+                  </select>
+                </div>
+
+                {/* 2. Time Range Selector */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <Calendar className="h-3.5 w-3.5 text-brand-primary" />
+                    Time Period
+                  </label>
+                  <select
+                    value={reportTimeRange}
+                    onChange={(e) => setReportTimeRange(e.target.value)}
+                    className="bg-slate-950/80 border border-brand-border rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-brand-primary cursor-pointer font-medium"
+                  >
+                    <option value="15m">Last 15 Minutes</option>
+                    <option value="1h">Last 1 Hour</option>
+                    <option value="6h">Last 6 Hours</option>
+                    <option value="24h">Last 24 Hours</option>
+                    <option value="7d">Last 7 Days</option>
+                    <option value="custom">Custom Date Range</option>
+                  </select>
+                </div>
+
+                {/* 3. Device Filter */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <Server className="h-3.5 w-3.5 text-slate-400" />
+                    Target Device
+                  </label>
+                  <select
+                    value={reportDeviceId}
+                    onChange={(e) => setReportDeviceId(e.target.value)}
+                    className="bg-slate-950/80 border border-brand-border rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-brand-primary cursor-pointer"
+                  >
+                    <option value="ALL">All Network Infrastructure</option>
+                    {devices.map(d => (
+                      <option key={d.id} value={d.id}>{d.name || d.hostname} ({d.ip_address})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 4. Device Type Filter */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <Layers className="h-3.5 w-3.5 text-slate-400" />
+                    Device Type
+                  </label>
+                  <select
+                    value={reportDeviceType}
+                    onChange={(e) => setReportDeviceType(e.target.value)}
+                    className="bg-slate-950/80 border border-brand-border rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-brand-primary cursor-pointer capitalize"
+                  >
+                    <option value="ALL">All Device Types</option>
+                    <option value="router">Router</option>
+                    <option value="switch">Switch</option>
+                    <option value="server">Server</option>
+                    <option value="firewall">Firewall</option>
+                    <option value="iot">IoT Node</option>
+                  </select>
+                </div>
+
+                {/* Conditional Custom Date Inputs */}
+                {reportTimeRange === 'custom' && (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-300">Start Date / Time</label>
+                      <input
+                        type="datetime-local"
+                        value={reportCustomStart}
+                        onChange={(e) => setReportCustomStart(e.target.value)}
+                        className="bg-slate-950/80 border border-brand-border rounded-lg p-2 text-xs text-white focus:outline-none focus:border-brand-primary"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-300">End Date / Time</label>
+                      <input
+                        type="datetime-local"
+                        value={reportCustomEnd}
+                        onChange={(e) => setReportCustomEnd(e.target.value)}
+                        className="bg-slate-950/80 border border-brand-border rounded-lg p-2 text-xs text-white focus:outline-none focus:border-brand-primary"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Status Filter */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-300">Status</label>
+                  <select
+                    value={reportStatus}
+                    onChange={(e) => setReportStatus(e.target.value)}
+                    className="bg-slate-950/80 border border-brand-border rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-brand-primary cursor-pointer"
+                  >
+                    <option value="ALL">All Statuses</option>
+                    <option value="online">Online</option>
+                    <option value="degraded">Degraded</option>
+                    <option value="offline">Offline</option>
+                  </select>
+                </div>
+
+                {/* Severity Filter (for Alerts & Network Health) */}
+                {(reportType === 'alerts' || reportType === 'network-health') && (
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-slate-300">Severity Level</label>
+                    <select
+                      value={reportSeverity}
+                      onChange={(e) => setReportSeverity(e.target.value)}
+                      className="bg-slate-950/80 border border-brand-border rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-brand-primary cursor-pointer"
+                    >
+                      <option value="ALL">All Severities</option>
+                      <option value="CRITICAL">Critical</option>
+                      <option value="WARNING">Warning</option>
+                      <option value="INFO">Info</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* TCP Port Filter */}
+                {reportType === 'tcp' && (
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-slate-300">TCP Port</label>
+                    <input
+                      type="number"
+                      placeholder="e.g. 80, 443, 22"
+                      value={reportPort}
+                      onChange={(e) => setReportPort(e.target.value)}
+                      className="bg-slate-950/80 border border-brand-border rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-brand-primary"
+                    />
+                  </div>
+                )}
+
+              </div>
+
+              {/* Action Buttons Row */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-brand-border/40 mt-2">
+                <button
+                  onClick={() => fetchReportData(reportType)}
+                  disabled={reportLoading}
+                  className="px-5 py-2.5 bg-brand-primary hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-brand-primary/20 transition-all flex items-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-4 w-4 ${reportLoading ? 'animate-spin' : ''}`} />
+                  Generate Report
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleExportReport('csv')}
+                    disabled={reportExporting || reportLoading || !reportData}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <FileSpreadsheet className="h-4 w-4" />
+                    {reportExporting === 'csv' ? 'Exporting CSV...' : 'Export CSV'}
+                  </button>
+
+                  <button
+                    onClick={() => handleExportReport('pdf')}
+                    disabled={reportExporting || reportLoading || !reportData}
+                    className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <Printer className="h-4 w-4" />
+                    {reportExporting === 'pdf' ? 'Generating PDF...' : 'Export PDF'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Report Results Content */}
+            {reportLoading ? (
+              <div className="glass-panel rounded-xl p-12 flex flex-col items-center justify-center gap-3 text-slate-400">
+                <RefreshCw className="h-8 w-8 animate-spin text-brand-primary" />
+                <span className="text-sm font-medium">Querying PostgreSQL database and compiling report...</span>
+              </div>
+            ) : reportError ? (
+              <div className="glass-panel rounded-xl p-6 border-rose-500/30 bg-rose-950/20 text-rose-300 flex items-center gap-3">
+                <AlertTriangle className="h-6 w-6 text-rose-400 shrink-0" />
+                <div>
+                  <h4 className="text-sm font-semibold text-white">Report Generation Error</h4>
+                  <p className="text-xs text-rose-300 mt-1">{reportError}</p>
+                </div>
+              </div>
+            ) : !reportData ? (
+              <div className="glass-panel rounded-xl p-12 text-center text-slate-500 flex flex-col items-center gap-2">
+                <FileText className="h-10 w-10 text-slate-600 mb-1" />
+                <p className="text-sm font-semibold text-slate-300">Select report criteria above and click "Generate Report"</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-6">
+
+                {/* 1. NETWORK HEALTH REPORT DISPLAY */}
+                {reportType === 'network-health' && (
+                  <div className="flex flex-col gap-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div className="glass-panel rounded-xl p-5 flex flex-col justify-between">
+                        <span className="text-2xs text-slate-400 uppercase tracking-wider font-semibold">Health Score</span>
+                        <div className="mt-2 text-3xl font-extrabold text-white font-mono">
+                          {reportData.network_health_score}%
+                        </div>
+                        <span className="text-2xs text-emerald-400 mt-1 font-medium">NOC Health Index</span>
+                      </div>
+                      <div className="glass-panel rounded-xl p-5 flex flex-col justify-between">
+                        <span className="text-2xs text-slate-400 uppercase tracking-wider font-semibold">Monitored Nodes</span>
+                        <div className="mt-2 text-3xl font-extrabold text-white font-mono">
+                          {reportData.total_devices}
+                        </div>
+                        <span className="text-2xs text-slate-400 mt-1">
+                          {reportData.online_devices} Online / {reportData.offline_devices} Offline
+                        </span>
+                      </div>
+                      <div className="glass-panel rounded-xl p-5 flex flex-col justify-between">
+                        <span className="text-2xs text-slate-400 uppercase tracking-wider font-semibold">Avg Latency / Loss</span>
+                        <div className="mt-2 text-3xl font-extrabold text-white font-mono">
+                          {reportData.avg_latency_ms !== null ? `${reportData.avg_latency_ms} ms` : 'N/A'}
+                        </div>
+                        <span className="text-2xs text-slate-400 mt-1">
+                          Packet Loss: {reportData.avg_packet_loss_pct !== null ? `${reportData.avg_packet_loss_pct}%` : '0%'}
+                        </span>
+                      </div>
+                      <div className="glass-panel rounded-xl p-5 flex flex-col justify-between">
+                        <span className="text-2xs text-slate-400 uppercase tracking-wider font-semibold">Active Incidents</span>
+                        <div className="mt-2 text-3xl font-extrabold text-rose-400 font-mono">
+                          {reportData.active_alerts_count}
+                        </div>
+                        <span className="text-2xs text-slate-400 mt-1">
+                          Crit: {reportData.critical_alerts_count} / Warn: {reportData.warning_alerts_count}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. DEVICE AVAILABILITY REPORT DISPLAY */}
+                {reportType === 'device-availability' && (
+                  <div className="flex flex-col gap-4">
+                    <div className="glass-panel rounded-xl p-4 flex items-center justify-between border-brand-primary/30">
+                      <div className="flex items-center gap-3">
+                        <CheckCircle className="h-5 w-5 text-emerald-400" />
+                        <div>
+                          <h4 className="text-xs font-semibold text-white">Overall Network Availability Ratio</h4>
+                          <p className="text-2xs text-slate-400 font-mono">Period: {reportData.reporting_period}</p>
+                        </div>
+                      </div>
+                      <div className="text-2xl font-black text-emerald-400 font-mono">
+                        {reportData.avg_availability_pct}%
+                      </div>
+                    </div>
+
+                    <div className="glass-panel rounded-xl p-5 overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="text-2xs text-slate-400 uppercase bg-slate-900/60 border-b border-brand-border">
+                          <tr>
+                            <th className="p-3">Device</th>
+                            <th className="p-3">IP Address</th>
+                            <th className="p-3">Type</th>
+                            <th className="p-3">Total Checks</th>
+                            <th className="p-3">Availability</th>
+                            <th className="p-3">Online (h)</th>
+                            <th className="p-3">Offline (h)</th>
+                            <th className="p-3">Avg Latency</th>
+                            <th className="p-3">Packet Loss</th>
+                            <th className="p-3">Incidents</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60">
+                          {reportData.items.length === 0 ? (
+                            <tr>
+                              <td colSpan="10" className="p-6 text-center text-slate-500">No availability records matching filter.</td>
+                            </tr>
+                          ) : (
+                            reportData.items.map((item) => (
+                              <tr key={item.device_id} className="hover:bg-slate-900/40 transition-colors font-mono">
+                                <td className="p-3 font-semibold text-white font-sans">{item.device_name}</td>
+                                <td className="p-3 text-slate-300">{item.ip_address}</td>
+                                <td className="p-3 capitalize text-slate-400 font-sans">{item.device_type}</td>
+                                <td className="p-3 text-slate-300">{item.total_checks}</td>
+                                <td className="p-3 font-bold text-emerald-400">{item.availability_pct}%</td>
+                                <td className="p-3 text-slate-300">{item.online_duration_hours}h</td>
+                                <td className="p-3 text-rose-400">{item.offline_duration_hours}h</td>
+                                <td className="p-3 text-slate-300">{item.avg_latency_ms !== null ? `${item.avg_latency_ms} ms` : 'N/A'}</td>
+                                <td className="p-3 text-slate-300">{item.packet_loss_pct !== null ? `${item.packet_loss_pct}%` : '0%'}</td>
+                                <td className="p-3 text-amber-400 font-bold">{item.incident_count}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. ALERT / INCIDENT REPORT DISPLAY */}
+                {reportType === 'alerts' && (
+                  <div className="flex flex-col gap-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="glass-panel rounded-xl p-3.5 text-center">
+                        <span className="text-3xs text-slate-400 uppercase font-semibold">Total Incidents</span>
+                        <div className="text-xl font-bold text-white mt-1 font-mono">{reportData.total_incidents}</div>
+                      </div>
+                      <div className="glass-panel rounded-xl p-3.5 text-center border-rose-500/20">
+                        <span className="text-3xs text-rose-400 uppercase font-semibold">Critical Incidents</span>
+                        <div className="text-xl font-bold text-rose-400 mt-1 font-mono">{reportData.critical_incidents}</div>
+                      </div>
+                      <div className="glass-panel rounded-xl p-3.5 text-center border-amber-500/20">
+                        <span className="text-3xs text-amber-400 uppercase font-semibold">Warning Incidents</span>
+                        <div className="text-xl font-bold text-amber-400 mt-1 font-mono">{reportData.warning_incidents}</div>
+                      </div>
+                      <div className="glass-panel rounded-xl p-3.5 text-center border-indigo-500/20">
+                        <span className="text-3xs text-indigo-400 uppercase font-semibold">Avg Duration</span>
+                        <div className="text-xl font-bold text-indigo-400 mt-1 font-mono">
+                          {reportData.avg_incident_duration_mins !== null ? `${reportData.avg_incident_duration_mins}m` : 'N/A'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="glass-panel rounded-xl p-5 overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="text-2xs text-slate-400 uppercase bg-slate-900/60 border-b border-brand-border">
+                          <tr>
+                            <th className="p-3">Alert Title</th>
+                            <th className="p-3">Device</th>
+                            <th className="p-3">Severity</th>
+                            <th className="p-3">Status</th>
+                            <th className="p-3">Type</th>
+                            <th className="p-3">Created At</th>
+                            <th className="p-3">Resolved At</th>
+                            <th className="p-3">Duration</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 font-mono">
+                          {reportData.items.length === 0 ? (
+                            <tr>
+                              <td colSpan="8" className="p-6 text-center text-slate-500 font-sans">No alert incidents found matching report parameters.</td>
+                            </tr>
+                          ) : (
+                            reportData.items.map((item) => (
+                              <tr key={item.alert_id} className="hover:bg-slate-900/40 transition-colors">
+                                <td className="p-3 font-semibold text-white font-sans">{item.title}</td>
+                                <td className="p-3 text-slate-300 font-sans">{item.device_name} ({item.ip_address})</td>
+                                <td className="p-3 font-sans">
+                                  <span className={`px-2 py-0.5 rounded text-3xs font-bold ${
+                                    item.severity === 'CRITICAL' ? 'bg-rose-500/20 text-rose-400' :
+                                    item.severity === 'WARNING' ? 'bg-amber-500/20 text-amber-400' :
+                                    'bg-cyan-500/20 text-cyan-400'
+                                  }`}>
+                                    {item.severity}
+                                  </span>
+                                </td>
+                                <td className="p-3 font-sans">
+                                  <span className={`px-2 py-0.5 rounded text-3xs font-semibold ${
+                                    item.status === 'RESOLVED' ? 'bg-emerald-500/20 text-emerald-400' :
+                                    item.status === 'ACKNOWLEDGED' ? 'bg-indigo-500/20 text-indigo-400' :
+                                    'bg-rose-500/20 text-rose-400'
+                                  }`}>
+                                    {item.status}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-slate-400 font-sans">{item.alert_type}</td>
+                                <td className="p-3 text-slate-400 text-2xs">{new Date(item.created_at).toLocaleString()}</td>
+                                <td className="p-3 text-slate-400 text-2xs">{item.resolved_at ? new Date(item.resolved_at).toLocaleString() : 'Active'}</td>
+                                <td className="p-3 text-slate-200 font-bold">{item.incident_duration_mins !== null ? `${item.incident_duration_mins}m` : '-'}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. ICMP PERFORMANCE REPORT DISPLAY */}
+                {reportType === 'icmp' && (
+                  <div className="flex flex-col gap-4">
+                    <div className="glass-panel rounded-xl p-5 overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="text-2xs text-slate-400 uppercase bg-slate-900/60 border-b border-brand-border">
+                          <tr>
+                            <th className="p-3">Device Name</th>
+                            <th className="p-3">IP Address</th>
+                            <th className="p-3">Checks Count</th>
+                            <th className="p-3">Avg Latency</th>
+                            <th className="p-3">Min Latency</th>
+                            <th className="p-3">Max Latency</th>
+                            <th className="p-3">Packet Loss</th>
+                            <th className="p-3">Availability</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 font-mono">
+                          {reportData.items.length === 0 ? (
+                            <tr>
+                              <td colSpan="8" className="p-6 text-center text-slate-500 font-sans">No ICMP latency logs recorded for parameters.</td>
+                            </tr>
+                          ) : (
+                            reportData.items.map((item) => (
+                              <tr key={item.device_id} className="hover:bg-slate-900/40 transition-colors">
+                                <td className="p-3 font-semibold text-white font-sans">{item.device_name}</td>
+                                <td className="p-3 text-slate-300">{item.ip_address}</td>
+                                <td className="p-3 text-slate-400">{item.total_checks}</td>
+                                <td className="p-3 text-emerald-400 font-bold">{item.avg_latency_ms !== null ? `${item.avg_latency_ms} ms` : 'N/A'}</td>
+                                <td className="p-3 text-slate-300">{item.min_latency_ms !== null ? `${item.min_latency_ms} ms` : 'N/A'}</td>
+                                <td className="p-3 text-slate-300">{item.max_latency_ms !== null ? `${item.max_latency_ms} ms` : 'N/A'}</td>
+                                <td className="p-3 text-amber-400">{item.packet_loss_pct !== null ? `${item.packet_loss_pct}%` : '0%'}</td>
+                                <td className="p-3 text-emerald-400 font-bold">{item.availability_pct}%</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. TCP SERVICE REPORT DISPLAY */}
+                {reportType === 'tcp' && (
+                  <div className="flex flex-col gap-4">
+                    <div className="glass-panel rounded-xl p-5 overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="text-2xs text-slate-400 uppercase bg-slate-900/60 border-b border-brand-border">
+                          <tr>
+                            <th className="p-3">Device Name</th>
+                            <th className="p-3">IP Address</th>
+                            <th className="p-3">Port</th>
+                            <th className="p-3">Service Status</th>
+                            <th className="p-3">Total Checks</th>
+                            <th className="p-3">Open / Fail</th>
+                            <th className="p-3">Avg Response Time</th>
+                            <th className="p-3">Availability</th>
+                            <th className="p-3">Last Check</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 font-mono">
+                          {reportData.items.length === 0 ? (
+                            <tr>
+                              <td colSpan="9" className="p-6 text-center text-slate-500 font-sans">No TCP port logs matching report criteria.</td>
+                            </tr>
+                          ) : (
+                            reportData.items.map((item, idx) => (
+                              <tr key={`${item.device_id}-${item.port}-${idx}`} className="hover:bg-slate-900/40 transition-colors">
+                                <td className="p-3 font-semibold text-white font-sans">{item.device_name}</td>
+                                <td className="p-3 text-slate-300">{item.ip_address}</td>
+                                <td className="p-3 font-bold text-indigo-400">{item.port}</td>
+                                <td className="p-3 font-sans">
+                                  <span className={`px-2 py-0.5 rounded text-3xs font-bold uppercase ${
+                                    item.service_status === 'open' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                                  }`}>
+                                    {item.service_status}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-slate-300">{item.total_checks}</td>
+                                <td className="p-3 text-slate-300">{item.open_checks} / <span className="text-rose-400">{item.failed_checks}</span></td>
+                                <td className="p-3 text-cyan-400">{item.avg_response_time_ms !== null ? `${item.avg_response_time_ms} ms` : 'N/A'}</td>
+                                <td className="p-3 font-bold text-emerald-400">{item.availability_pct}%</td>
+                                <td className="p-3 text-slate-400 text-2xs">{item.last_check_timestamp ? new Date(item.last_check_timestamp).toLocaleString() : 'N/A'}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. SNMP INTERFACE TRAFFIC REPORT DISPLAY */}
+                {reportType === 'snmp' && (
+                  <div className="flex flex-col gap-4">
+                    <div className="glass-panel rounded-xl p-5 overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="text-2xs text-slate-400 uppercase bg-slate-900/60 border-b border-brand-border">
+                          <tr>
+                            <th className="p-3">Device Name</th>
+                            <th className="p-3">IP Address</th>
+                            <th className="p-3">Interface</th>
+                            <th className="p-3">Status</th>
+                            <th className="p-3">Speed</th>
+                            <th className="p-3">Inbound Traffic</th>
+                            <th className="p-3">Outbound Traffic</th>
+                            <th className="p-3">Utilization</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 font-mono">
+                          {reportData.items.length === 0 ? (
+                            <tr>
+                              <td colSpan="8" className="p-6 text-center text-slate-500 font-sans">No SNMP interface telemetry entries found.</td>
+                            </tr>
+                          ) : (
+                            reportData.items.map((item, idx) => (
+                              <tr key={`${item.device_id}-${item.interface_name}-${idx}`} className="hover:bg-slate-900/40 transition-colors">
+                                <td className="p-3 font-semibold text-white font-sans">{item.device_name}</td>
+                                <td className="p-3 text-slate-300">{item.ip_address}</td>
+                                <td className="p-3 font-bold text-emerald-400">{item.interface_name}</td>
+                                <td className="p-3 font-sans">
+                                  <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-3xs font-bold uppercase">
+                                    {item.interface_status}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-slate-300">{item.interface_speed_bps ? `${(item.interface_speed_bps / 1e6).toFixed(1)} Mbps` : 'N/A'}</td>
+                                <td className="p-3 text-emerald-400">{item.avg_inbound_bps !== null ? `${(item.avg_inbound_bps / 1e6).toFixed(3)} Mbps` : 'N/A'}</td>
+                                <td className="p-3 text-blue-400">{item.avg_outbound_bps !== null ? `${(item.avg_outbound_bps / 1e6).toFixed(3)} Mbps` : 'N/A'}</td>
+                                <td className="p-3 font-bold text-purple-400">{item.traffic_utilization_pct !== null ? `${item.traffic_utilization_pct}%` : 'N/A'}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* 4. DEVICES TAB */}
         {activeTab === 'devices' && (
           <div className="flex flex-col gap-6">
             
