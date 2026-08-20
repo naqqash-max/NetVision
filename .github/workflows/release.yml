@@ -1,0 +1,43 @@
+name: Build and Release NetVision
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger build on version tags, e.g. v1.0.0
+
+permissions:
+  contents: write # Required to create a release and upload assets
+
+jobs:
+  build:
+    name: Build Installer and Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Run Installer Build Script
+        shell: cmd
+        run: |
+          build-installer.bat
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/installer/NetVision-Setup.exe
+          name: NetVision Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
