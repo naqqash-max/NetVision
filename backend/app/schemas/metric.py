@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
@@ -15,8 +15,7 @@ class PingLogResponse(BaseModel):
     error_msg: Optional[str] = None
     timestamp: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DeviceStatusResponse(BaseModel):
     device_id: UUID
@@ -45,8 +44,7 @@ class PortLogResponse(BaseModel):
     error_msg: Optional[str] = None
     timestamp: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PortStatusResponse(BaseModel):
     port: int
@@ -55,5 +53,4 @@ class PortStatusResponse(BaseModel):
     response_time_ms: Optional[float] = None
     last_checked: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

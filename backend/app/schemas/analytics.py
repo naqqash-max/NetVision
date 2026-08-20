@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime
@@ -16,8 +16,7 @@ class NocSummaryResponse(BaseModel):
     avg_latency_ms: Optional[float] = None
     avg_packet_loss_pct: Optional[float] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class IcmpHistoryPoint(BaseModel):
     timestamp: datetime
@@ -27,8 +26,7 @@ class IcmpHistoryPoint(BaseModel):
     packet_loss_pct: float
     is_online: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TcpHistoryPoint(BaseModel):
     timestamp: datetime
@@ -38,8 +36,7 @@ class TcpHistoryPoint(BaseModel):
     response_time_ms: Optional[float] = None
     is_open: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SnmpHistoryPoint(BaseModel):
     timestamp: datetime
@@ -50,8 +47,7 @@ class SnmpHistoryPoint(BaseModel):
     in_rate_bps: float = 0.0
     out_rate_bps: float = 0.0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class HistoricalMetricsResponse(BaseModel):
     time_range: str
@@ -61,5 +57,4 @@ class HistoricalMetricsResponse(BaseModel):
     tcp_metrics: List[TcpHistoryPoint]
     snmp_metrics: List[SnmpHistoryPoint]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

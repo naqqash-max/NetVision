@@ -1,7 +1,9 @@
 import pytest
 import socket
 import asyncio
-from services.icmp_monitor import ping_ipv4
+import struct
+from unittest.mock import MagicMock, patch
+from services.icmp_monitor import ping_ipv4, ping_one
 
 LOCALHOST_IP = "127.0.0.1"
 UNREACHABLE_IP = "192.0.2.1"
@@ -52,3 +54,49 @@ async def test_invalid_address():
     assert result["status"] == "offline"
     assert result["packet_loss_pct"] == 100.0
     assert "invalid" in result["error_msg"].lower()
+
+
+def test_ping_one_matching_logic():
+    """
+    Unit test for ping_one matching logic:
+    - Correct IP + correct packet ID + correct sequence = accepted
+    - Wrong IP + otherwise matching packet = rejected
+    - Wrong sequence = rejected
+    - Wrong packet ID = rejected
+    """
+    mock_socket = MagicMock()
+    
+    with patch('socket.socket', return_value=mock_socket), \
+         patch('select.select', return_value=([mock_socket], [], [])):
+         
+         correct_ip = "192.168.1.1"
+         correct_pid = 1234
+         correct_seq = 1
+         
+         # 1. Correct IP + correct packet ID + correct sequence = accepted
+         icmp_hdr = struct.pack("bbHHh", 0, 0, 0, correct_pid, correct_seq)
+         mock_packet = b'\x00' * 20 + icmp_hdr
+         mock_socket.recvfrom.return_value = (mock_packet, (correct_ip, 0))
+         
+         latency = ping_one(correct_ip, timeout=0.1, seq=correct_seq, packet_id=correct_pid)
+         assert latency is not None
+         
+         # 2. Wrong IP + otherwise matching packet = rejected (should time out and return None)
+         mock_socket.recvfrom.return_value = (mock_packet, ("192.168.1.2", 0))
+         latency = ping_one(correct_ip, timeout=0.1, seq=correct_seq, packet_id=correct_pid)
+         assert latency is None
+         
+         # 3. Wrong sequence = rejected
+         icmp_hdr_wrong_seq = struct.pack("bbHHh", 0, 0, 0, correct_pid, 999)
+         mock_packet_wrong_seq = b'\x00' * 20 + icmp_hdr_wrong_seq
+         mock_socket.recvfrom.return_value = (mock_packet_wrong_seq, (correct_ip, 0))
+         latency = ping_one(correct_ip, timeout=0.1, seq=correct_seq, packet_id=correct_pid)
+         assert latency is None
+         
+         # 4. Wrong packet ID = rejected
+         icmp_hdr_wrong_pid = struct.pack("bbHHh", 0, 0, 0, 9999, correct_seq)
+         mock_packet_wrong_pid = b'\x00' * 20 + icmp_hdr_wrong_pid
+         mock_socket.recvfrom.return_value = (mock_packet_wrong_pid, (correct_ip, 0))
+         latency = ping_one(correct_ip, timeout=0.1, seq=correct_seq, packet_id=correct_pid)
+         assert latency is None
+

@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -14,6 +15,21 @@ class MonitorScheduler:
         self.device_tasks = {}  # Tracks device_id -> last_check_time (datetime)
         self.snmp_tasks = {}    # Tracks device_id -> last_snmp_check_time (datetime)
         self.running = False
+        
+        limit_str = os.getenv("MONITOR_CONCURRENCY_LIMIT", "10")
+        try:
+            self.concurrency_limit = int(limit_str)
+        except ValueError:
+            self.concurrency_limit = 10
+        self.semaphore = asyncio.Semaphore(self.concurrency_limit)
+
+    async def monitor_device_wrapped(self, device_id, ip_address, hostname):
+        async with self.semaphore:
+            await self.monitor_device(device_id, ip_address, hostname)
+
+    async def poll_device_snmp_task_wrapped(self, device_id, ip_address, hostname, snmp_config):
+        async with self.semaphore:
+            await self.poll_device_snmp_task(device_id, ip_address, hostname, snmp_config)
 
     async def start(self):
         """
@@ -63,7 +79,7 @@ class MonitorScheduler:
                     self.device_tasks[device_id] = current_time
                     # Fire task asynchronously to prevent blocking the scheduler loop
                     asyncio.create_task(
-                        self.monitor_device(device_id, device.ip_address, device.hostname)
+                        self.monitor_device_wrapped(device_id, device.ip_address, device.hostname)
                     )
 
                 # 2. SNMP checking
@@ -75,7 +91,7 @@ class MonitorScheduler:
                     if last_snmp_check is None or (current_time - last_snmp_check).total_seconds() >= snmp_interval:
                         self.snmp_tasks[device_id] = current_time
                         asyncio.create_task(
-                            self.poll_device_snmp_task(device_id, device.ip_address, device.hostname, snmp_config)
+                            self.poll_device_snmp_task_wrapped(device_id, device.ip_address, device.hostname, snmp_config)
                         )
                 else:
                     if device_id in self.snmp_tasks:

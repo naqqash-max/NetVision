@@ -138,3 +138,8 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token_hash ON password_reset_tokens(token_hash);
 
+-- 11. Performance Indexes for Reports & Retention Pruning
+CREATE INDEX IF NOT EXISTS idx_ping_logs_timestamp_device ON ping_logs (timestamp, device_id);
+CREATE INDEX IF NOT EXISTS idx_port_logs_timestamp_device ON port_logs (timestamp, device_id);
+CREATE INDEX IF NOT EXISTS idx_snmp_logs_timestamp_device ON snmp_logs (timestamp, device_id);
+

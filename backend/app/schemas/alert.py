@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from uuid import UUID
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -7,8 +7,7 @@ class DeviceNameOnly(BaseModel):
     name: Optional[str] = None
     hostname: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class AlertBase(BaseModel):
     device_id: UUID
@@ -29,8 +28,7 @@ class AlertResponse(AlertBase):
     resolved_at: Optional[datetime] = None
     device: Optional[DeviceNameOnly] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class AlertSummaryResponse(BaseModel):
     total_active: int

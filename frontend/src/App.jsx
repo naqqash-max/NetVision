@@ -36,7 +36,9 @@ import {
   FileText,
   Download,
   FileSpreadsheet,
-  Printer
+  Printer,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -53,7 +55,11 @@ import {
   Legend 
 } from 'recharts';
 
-const BACKEND_URL = 'http://localhost:8000';
+const BACKEND_URL = import.meta.env.VITE_API_URL || (
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    : window.location.origin
+);
 
 function App() {
   // Authentication & Session States
@@ -70,6 +76,9 @@ function App() {
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState(null);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showResetNewPassword, setShowResetNewPassword] = useState(false);
+  const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
 
   // Password Recovery States
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'forgot_password' | 'reset_password'
@@ -86,6 +95,40 @@ function App() {
   const [resetError, setResetError] = useState(null);
   const [adminResetSending, setAdminResetSending] = useState(null);
 
+  // Initial Deployment Setup States
+  const [isInitialized, setIsInitialized] = useState(true);
+  const [checkingSetup, setCheckingSetup] = useState(true);
+  const [setupFullName, setSetupFullName] = useState('');
+  const [setupUsername, setSetupUsername] = useState('');
+  const [setupEmail, setSetupEmail] = useState('');
+  const [setupPassword, setSetupPassword] = useState('');
+  const [setupConfirmPassword, setSetupConfirmPassword] = useState('');
+  const [showSetupPassword, setShowSetupPassword] = useState(false);
+  const [showSetupConfirmPassword, setShowSetupConfirmPassword] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [setupError, setSetupError] = useState(null);
+
+  // Check setup status on initial mount
+  useEffect(() => {
+    const checkSetupStatus = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/v1/auth/setup-status`);
+        if (res.ok) {
+          const data = await res.json();
+          setIsInitialized(data.is_initialized);
+          if (!data.is_initialized) {
+            setAuthMode('initial_setup');
+          }
+        }
+      } catch (err) {
+        console.error('Error checking setup status:', err);
+      } finally {
+        setCheckingSetup(false);
+      }
+    };
+    checkSetupStatus();
+  }, []);
+
   // Check URL query parameters for reset token on initial mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -95,6 +138,45 @@ function App() {
       setAuthMode('reset_password');
     }
   }, []);
+
+  const handleInitialSetupSubmit = async (e) => {
+    e.preventDefault();
+    setSetupError(null);
+
+    if (setupPassword !== setupConfirmPassword) {
+      setSetupError('Passwords do not match. Please verify and try again.');
+      return;
+    }
+
+    setSetupLoading(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/v1/auth/setup-admin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          full_name: setupFullName,
+          username: setupUsername,
+          email: setupEmail,
+          password: setupPassword,
+          confirm_password: setupConfirmPassword
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'Initial setup failed.');
+      }
+
+      setSuccessMessage('Administrator created successfully! You may now log in.');
+      setIsInitialized(true);
+      setAuthMode('login');
+      setLoginUsername(setupEmail);
+    } catch (err) {
+      setSetupError(err.message);
+    } finally {
+      setSetupLoading(false);
+    }
+  };
 
   const handleForgotPasswordSubmit = async (e) => {
     e.preventDefault();
@@ -716,14 +798,12 @@ function App() {
         url += `&port=${reportPort}`;
       }
 
-      const token = localStorage.getItem('token');
-      const res = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const res = await authFetch(url);
 
-      if (!res.ok) throw new Error("Failed to export report document");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(errData.detail || "Failed to export report document");
+      }
 
       const blob = await res.blob();
       const blobUrl = window.URL.createObjectURL(blob);
@@ -1225,64 +1305,264 @@ function App() {
   // Alerts: items currently Offline or Degraded
   const activeAlerts = devices.filter(d => d.status === 'offline' || d.status === 'degraded');
 
+  if (checkingSetup) {
+    return (
+      <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
+        {/* Dynamic Background Glowing Spheres */}
+        <div className="absolute -top-32 -left-32 w-[500px] h-[500px] bg-indigo-600/20 rounded-full blur-[120px] pointer-events-none animate-pulse"></div>
+        <div className="absolute -bottom-32 -right-32 w-[500px] h-[500px] bg-cyan-500/15 rounded-full blur-[120px] pointer-events-none animate-pulse"></div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-brand-primary/10 rounded-full blur-[140px] pointer-events-none"></div>
+
+        <div className="flex flex-col items-center gap-4 relative z-10 text-center">
+          <RefreshCw className="h-10 w-10 text-indigo-500 animate-spin" />
+          <h2 className="text-sm font-semibold tracking-wider text-slate-400 uppercase">Connecting to NetVision Services...</h2>
+        </div>
+      </div>
+    );
+  }
+
+  // Force login/setup routing logic
+  if (!isInitialized) {
+    // If the database has no admin, clear any local stale credentials
+    if (token || user) {
+      localStorage.removeItem('netvision_token');
+      localStorage.removeItem('netvision_user');
+      setToken('');
+      setUser(null);
+    }
+    if (authMode !== 'initial_setup') {
+      setAuthMode('initial_setup');
+    }
+  } else {
+    // Database is initialized, if the user was on initial_setup they should go to login
+    if (authMode === 'initial_setup') {
+      setAuthMode('login');
+    }
+  }
+
   if (!token || !user) {
     return (
-      <div className="min-h-screen bg-brand-dark text-slate-100 flex items-center justify-center p-4 font-sans relative overflow-hidden">
-        {/* Decorative elements */}
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand-primary/10 rounded-full blur-3xl pointer-events-none"></div>
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-brand-secondary/10 rounded-full blur-3xl pointer-events-none"></div>
-        
+      <div className="min-h-screen bg-[#070b14] text-slate-100 flex items-center justify-center p-4 font-sans relative overflow-hidden selection:bg-indigo-500 selection:text-white">
+        {/* Dynamic Background Glowing Spheres */}
+        <div className="absolute -top-32 -left-32 w-[500px] h-[500px] bg-indigo-600/20 rounded-full blur-[120px] pointer-events-none animate-pulse"></div>
+        <div className="absolute -bottom-32 -right-32 w-[500px] h-[500px] bg-cyan-500/15 rounded-full blur-[120px] pointer-events-none animate-pulse"></div>
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-brand-primary/10 rounded-full blur-[140px] pointer-events-none"></div>
+
+        {/* Cybernetic Mesh Lines Grid */}
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b15_1px,transparent_1px),linear-gradient(to_bottom,#1e293b15_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)] pointer-events-none"></div>
+
+        {/* Global Toast Alerts */}
         {successMessage && (
-          <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 bg-emerald-500 text-white px-4 py-3 rounded-lg shadow-lg border border-emerald-400/30 animate-bounce">
-            <CheckCircle className="h-5 w-5" />
-            <span className="text-sm font-medium">{successMessage}</span>
+          <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-emerald-500/90 text-white px-5 py-3.5 rounded-2xl shadow-2xl backdrop-blur-md border border-emerald-400/40 animate-in fade-in slide-in-from-bottom-5 duration-300">
+            <CheckCircle className="h-5 w-5 text-emerald-200" />
+            <span className="text-xs font-semibold">{successMessage}</span>
           </div>
         )}
         {errorMessage && (
-          <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 bg-rose-500 text-white px-4 py-3 rounded-lg shadow-lg border border-rose-400/30">
-            <AlertTriangle className="h-5 w-5" />
-            <span className="text-sm font-medium">{errorMessage}</span>
+          <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-rose-500/90 text-white px-5 py-3.5 rounded-2xl shadow-2xl backdrop-blur-md border border-rose-400/40 animate-in fade-in slide-in-from-bottom-5 duration-300">
+            <AlertTriangle className="h-5 w-5 text-rose-200" />
+            <span className="text-xs font-semibold">{errorMessage}</span>
           </div>
         )}
 
-        <div className="glass-panel w-full max-w-md rounded-2xl p-8 flex flex-col gap-6 shadow-2xl border border-brand-border/80 relative z-10">
+        {/* Main Auth Container Card */}
+        <div className="w-full max-w-md rounded-3xl p-8 flex flex-col gap-6 bg-slate-900/60 backdrop-blur-2xl border border-white/10 shadow-[0_0_50px_rgba(79,70,229,0.15)] relative z-10">
+          
+          {/* Header & Logo */}
           <div className="flex flex-col items-center gap-3 text-center">
-            <div className="bg-indigo-600 p-3.5 rounded-2xl text-white shadow-xl shadow-indigo-600/30 flex items-center justify-center">
-              <Activity className="h-8 w-8 animate-pulse" />
+            <div className="relative group">
+              <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-cyan-500 rounded-2xl blur-md opacity-75 group-hover:opacity-100 transition duration-500"></div>
+              <div className="relative bg-slate-950 p-4 rounded-2xl text-indigo-400 border border-white/10 flex items-center justify-center shadow-xl">
+                <Activity className="h-9 w-9 animate-pulse text-indigo-400" />
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-white font-display mt-2">NetVision Portal</h1>
-              <p className="text-xs text-slate-400 mt-1">Real-time network diagnostic monitoring</p>
+            
+            <div className="mt-1">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold uppercase tracking-wider mb-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                System Operational
+              </div>
+              <h1 className="text-2xl font-extrabold tracking-tight text-white font-display bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+                NetVision Portal
+              </h1>
+              <p className="text-xs text-slate-400 mt-1 font-medium">Enterprise Telemetry & Diagnostic Operations</p>
             </div>
           </div>
 
-          {/* FORGOT PASSWORD MODE */}
-          {authMode === 'forgot_password' ? (
+          {/* INITIAL SETUP MODE (First-Time Administrator Setup) */}
+          {authMode === 'initial_setup' ? (
             <div className="flex flex-col gap-5 text-xs">
               <div className="text-center">
-                <h2 className="text-base font-semibold text-white">Password Recovery</h2>
-                <p className="text-xs text-slate-400 mt-1">Enter your registered email address to receive a password reset link.</p>
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-[10px] font-bold uppercase tracking-wider mb-2">
+                  First-Time Deployment Setup
+                </div>
+                <h2 className="text-base font-bold text-white tracking-wide">Welcome to NetVision</h2>
+                <p className="text-xs text-slate-400 mt-1">Create your administrator account to get started.</p>
+              </div>
+
+              {setupError && (
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-2xl flex items-center gap-2.5 font-medium">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 text-rose-400" />
+                  <span>{setupError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleInitialSetupSubmit} className="flex flex-col gap-4 text-xs">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <User className="h-3.5 w-3.5 text-indigo-400" />
+                    Administrator Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. System Administrator"
+                    value={setupFullName}
+                    onChange={(e) => setSetupFullName(e.target.value)}
+                    className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl p-3.5 text-white placeholder:text-slate-600 transition-all outline-none"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <User className="h-3.5 w-3.5 text-indigo-400" />
+                    Username
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    minLength={3}
+                    maxLength={50}
+                    placeholder="e.g. admin"
+                    value={setupUsername}
+                    onChange={(e) => setSetupUsername(e.target.value)}
+                    className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl p-3.5 text-white placeholder:text-slate-600 transition-all outline-none"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Mail className="h-3.5 w-3.5 text-indigo-400" />
+                    Administrator Email
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="admin@netvision.com"
+                    value={setupEmail}
+                    onChange={(e) => setSetupEmail(e.target.value)}
+                    className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl p-3.5 text-white placeholder:text-slate-600 transition-all outline-none"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Lock className="h-3.5 w-3.5 text-indigo-400" />
+                    Password
+                  </label>
+                  <div className="relative flex items-center">
+                    <input
+                      type={showSetupPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      placeholder="Minimum 6 characters"
+                      value={setupPassword}
+                      onChange={(e) => setSetupPassword(e.target.value)}
+                      className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl pl-3.5 pr-11 py-3 text-white placeholder:text-slate-600 transition-all outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSetupPassword(!showSetupPassword)}
+                      className="absolute right-3.5 text-slate-400 hover:text-indigo-400 transition-colors p-1"
+                      title={showSetupPassword ? "Hide password" : "Show password"}
+                    >
+                      {showSetupPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Lock className="h-3.5 w-3.5 text-indigo-400" />
+                    Confirm Password
+                  </label>
+                  <div className="relative flex items-center">
+                    <input
+                      type={showSetupConfirmPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      placeholder="Confirm password"
+                      value={setupConfirmPassword}
+                      onChange={(e) => setSetupConfirmPassword(e.target.value)}
+                      className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl pl-3.5 pr-11 py-3 text-white placeholder:text-slate-600 transition-all outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSetupConfirmPassword(!showSetupConfirmPassword)}
+                      className="absolute right-3.5 text-slate-400 hover:text-indigo-400 transition-colors p-1"
+                      title={showSetupConfirmPassword ? "Hide password" : "Show password"}
+                    >
+                      {showSetupConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {setupPassword && setupConfirmPassword && (
+                  <div className="flex items-center gap-2 text-[11px] font-semibold">
+                    {setupPassword === setupConfirmPassword ? (
+                      <span className="text-emerald-400 flex items-center gap-1">
+                        <CheckCircle className="h-3.5 w-3.5" /> Passwords match
+                      </span>
+                    ) : (
+                      <span className="text-rose-400 flex items-center gap-1">
+                        <XCircle className="h-3.5 w-3.5" /> Passwords do not match
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={setupLoading}
+                  className="mt-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 text-white font-semibold p-3.5 rounded-xl shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 text-sm"
+                >
+                  {setupLoading ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      Initializing Administrator...
+                    </>
+                  ) : (
+                    'Create Administrator'
+                  )}
+                </button>
+              </form>
+            </div>
+          ) : authMode === 'forgot_password' ? (
+            <div className="flex flex-col gap-5 text-xs">
+              <div className="text-center">
+                <h2 className="text-base font-bold text-white tracking-wide">Password Recovery</h2>
+                <p className="text-xs text-slate-400 mt-1">Enter your registered email address to receive a secure password reset link.</p>
               </div>
 
               {forgotMessage && (
-                <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-xl flex items-start gap-2 font-medium">
-                  <CheckCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                  <span>{forgotMessage}</span>
+                <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-2xl flex items-start gap-3 font-medium backdrop-blur-sm">
+                  <CheckCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-emerald-400" />
+                  <span className="leading-relaxed">{forgotMessage}</span>
                 </div>
               )}
 
               {forgotDevUrl && (
-                <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs rounded-xl flex flex-col gap-2">
+                <div className="p-4 bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs rounded-2xl flex flex-col gap-2.5 backdrop-blur-sm">
                   <div className="flex items-center gap-2 font-bold text-amber-400">
                     <Info className="h-4 w-4" />
                     <span>[DEVELOPMENT ONLY] Reset Link</span>
                   </div>
-                  <p className="text-[11px] text-slate-300">SMTP is not configured in development mode. Click below to reset password:</p>
+                  <p className="text-[11px] text-slate-300">Development mode active. Click below to open password reset form directly:</p>
                   <button
                     onClick={() => {
                       setAuthMode('reset_password');
                     }}
-                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2 px-3 rounded-lg transition-all text-xs text-center"
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2.5 px-4 rounded-xl transition-all text-xs text-center shadow-lg shadow-amber-500/20"
                   >
                     Open Reset Password Form
                   </button>
@@ -1292,35 +1572,40 @@ function App() {
               {!forgotMessage && (
                 <form onSubmit={handleForgotPasswordSubmit} className="flex flex-col gap-4 text-xs">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-slate-400 font-medium">Email Address</label>
-                    <input
-                      type="email"
-                      required
-                      placeholder="e.g. user@netvision.com"
-                      value={forgotEmail}
-                      onChange={(e) => setForgotEmail(e.target.value)}
-                      className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
-                    />
+                    <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                      <Mail className="h-3.5 w-3.5 text-indigo-400" />
+                      Email Address
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        type="email"
+                        required
+                        placeholder="e.g. user@netvision.com"
+                        value={forgotEmail}
+                        onChange={(e) => setForgotEmail(e.target.value)}
+                        className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl p-3.5 text-white placeholder:text-slate-600 transition-all outline-none"
+                      />
+                    </div>
                   </div>
 
                   <button
                     type="submit"
                     disabled={forgotLoading}
-                    className="mt-2 bg-brand-primary hover:bg-indigo-500 disabled:opacity-50 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
+                    className="mt-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 text-white font-semibold p-3.5 rounded-xl shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2"
                   >
                     {forgotLoading ? (
                       <>
                         <RefreshCw className="h-4 w-4 animate-spin" />
-                        Sending Request...
+                        Sending Reset Link...
                       </>
                     ) : (
-                      'Send Reset Link'
+                      'Send Password Reset Link'
                     )}
                   </button>
                 </form>
               )}
 
-              <div className="text-center pt-2 border-t border-brand-border/40">
+              <div className="text-center pt-3 border-t border-slate-800/80">
                 <button
                   type="button"
                   onClick={() => {
@@ -1328,7 +1613,7 @@ function App() {
                     setForgotMessage(null);
                     setForgotDevUrl(null);
                   }}
-                  className="text-slate-400 hover:text-white font-medium transition-colors text-xs inline-flex items-center gap-1"
+                  className="text-slate-400 hover:text-indigo-400 font-semibold transition-colors text-xs inline-flex items-center gap-1.5"
                 >
                   ← Return to Login
                 </button>
@@ -1338,24 +1623,24 @@ function App() {
             /* RESET PASSWORD MODE */
             <div className="flex flex-col gap-5 text-xs">
               <div className="text-center">
-                <h2 className="text-base font-semibold text-white">Reset Your Password</h2>
-                <p className="text-xs text-slate-400 mt-1">Enter your new password below (minimum 6 characters).</p>
+                <h2 className="text-base font-bold text-white tracking-wide">Set New Password</h2>
+                <p className="text-xs text-slate-400 mt-1">Choose a strong password (minimum 6 characters).</p>
               </div>
 
               {resetError && (
-                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-xl flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-2xl flex items-center gap-2.5 font-medium">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 text-rose-400" />
                   <span>{resetError}</span>
                 </div>
               )}
 
               {resetSuccess ? (
                 <div className="flex flex-col gap-4 text-center py-2">
-                  <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-xl flex flex-col items-center gap-2 font-medium">
-                    <CheckCircle className="h-8 w-8 text-emerald-400 animate-bounce" />
-                    <span>Password has been reset successfully!</span>
-                    <p className="text-[11px] text-slate-400 font-normal mt-1">
-                      Your old credentials and active sessions have been revoked. You may now log in with your new password.
+                  <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-2xl flex flex-col items-center gap-2.5 font-medium backdrop-blur-sm">
+                    <CheckCircle className="h-10 w-10 text-emerald-400 animate-bounce" />
+                    <span className="text-sm font-bold">Password Reset Complete!</span>
+                    <p className="text-[11px] text-slate-300 font-normal leading-relaxed">
+                      Your password has been updated and all previous active sessions have been revoked for your security.
                     </p>
                   </div>
                   <button
@@ -1366,43 +1651,87 @@ function App() {
                       setResetNewPassword('');
                       setResetConfirmPassword('');
                     }}
-                    className="w-full bg-brand-primary hover:bg-indigo-500 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all text-center"
+                    className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-semibold p-3.5 rounded-xl shadow-lg shadow-indigo-600/30 transition-all text-center"
                   >
                     Proceed to Login
                   </button>
                 </div>
               ) : (
                 <form onSubmit={handleResetPasswordSubmit} className="flex flex-col gap-4 text-xs">
+                  
+                  {/* New Password with Eye Icon */}
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-slate-400 font-medium">New Password</label>
-                    <input
-                      type="password"
-                      required
-                      minLength={6}
-                      placeholder="••••••••"
-                      value={resetNewPassword}
-                      onChange={(e) => setResetNewPassword(e.target.value)}
-                      className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
-                    />
+                    <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                      <Lock className="h-3.5 w-3.5 text-indigo-400" />
+                      New Password
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        type={showResetNewPassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        placeholder="Minimum 6 characters"
+                        value={resetNewPassword}
+                        onChange={(e) => setResetNewPassword(e.target.value)}
+                        className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl pl-3.5 pr-11 py-3 text-white placeholder:text-slate-600 transition-all outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowResetNewPassword(!showResetNewPassword)}
+                        className="absolute right-3.5 text-slate-400 hover:text-indigo-400 transition-colors p-1"
+                        title={showResetNewPassword ? "Hide password" : "Show password"}
+                      >
+                        {showResetNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
 
+                  {/* Confirm Password with Eye Icon */}
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-slate-400 font-medium">Confirm New Password</label>
-                    <input
-                      type="password"
-                      required
-                      minLength={6}
-                      placeholder="••••••••"
-                      value={resetConfirmPassword}
-                      onChange={(e) => setResetConfirmPassword(e.target.value)}
-                      className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
-                    />
+                    <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                      <Lock className="h-3.5 w-3.5 text-indigo-400" />
+                      Confirm New Password
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        type={showResetConfirmPassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        placeholder="Re-enter new password"
+                        value={resetConfirmPassword}
+                        onChange={(e) => setResetConfirmPassword(e.target.value)}
+                        className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl pl-3.5 pr-11 py-3 text-white placeholder:text-slate-600 transition-all outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowResetConfirmPassword(!showResetConfirmPassword)}
+                        className="absolute right-3.5 text-slate-400 hover:text-indigo-400 transition-colors p-1"
+                        title={showResetConfirmPassword ? "Hide password" : "Show password"}
+                      >
+                        {showResetConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Password Match Indicator */}
+                  {resetNewPassword && resetConfirmPassword && (
+                    <div className="flex items-center gap-2 text-[11px] font-semibold">
+                      {resetNewPassword === resetConfirmPassword ? (
+                        <span className="text-emerald-400 flex items-center gap-1">
+                          <CheckCircle className="h-3.5 w-3.5" /> Passwords match
+                        </span>
+                      ) : (
+                        <span className="text-rose-400 flex items-center gap-1">
+                          <XCircle className="h-3.5 w-3.5" /> Passwords do not match
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   <button
                     type="submit"
                     disabled={resetLoading}
-                    className="mt-2 bg-brand-primary hover:bg-indigo-500 disabled:opacity-50 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
+                    className="mt-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 text-white font-semibold p-3.5 rounded-xl shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2"
                   >
                     {resetLoading ? (
                       <>
@@ -1410,18 +1739,18 @@ function App() {
                         Updating Password...
                       </>
                     ) : (
-                      'Reset Password'
+                      'Update Password'
                     )}
                   </button>
 
-                  <div className="text-center pt-2 border-t border-brand-border/40">
+                  <div className="text-center pt-3 border-t border-slate-800/80">
                     <button
                       type="button"
                       onClick={() => {
                         setAuthMode('login');
                         setResetError(null);
                       }}
-                      className="text-slate-400 hover:text-white font-medium transition-colors text-xs inline-flex items-center gap-1"
+                      className="text-slate-400 hover:text-indigo-400 font-semibold transition-colors text-xs inline-flex items-center gap-1.5"
                     >
                       ← Return to Login
                     </button>
@@ -1430,55 +1759,78 @@ function App() {
               )}
             </div>
           ) : (
-            /* DEFAULT LOGIN MODE */
-            <form onSubmit={handleLogin} className="flex flex-col gap-4 text-xs mt-2">
+            /* DEFAULT LOGIN MODE WITH EYE TOGGLE */
+            <form onSubmit={handleLogin} className="flex flex-col gap-4 text-xs mt-1">
               {loginError && (
-                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-lg flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-2xl flex items-center gap-2.5 font-medium">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 text-rose-400" />
                   <span>{loginError}</span>
                 </div>
               )}
 
+              {/* Username or Email Input */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-slate-400 font-medium">Username or Email</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. admin@netvision.local"
-                  value={loginUsername}
-                  onChange={(e) => setLoginUsername(e.target.value)}
-                  className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
-                />
+                <label className="text-slate-300 font-semibold flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <User className="h-3.5 w-3.5 text-indigo-400" />
+                    Username or Email
+                  </span>
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. admin@netvision.com"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl p-3.5 text-white placeholder:text-slate-600 transition-all outline-none"
+                  />
+                </div>
               </div>
 
+              {/* Password Input with Eye Icon */}
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="text-slate-400 font-medium">Password</label>
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Lock className="h-3.5 w-3.5 text-indigo-400" />
+                    Password
+                  </label>
                   <button
                     type="button"
                     onClick={() => {
                       setAuthMode('forgot_password');
                       setLoginError(null);
                     }}
-                    className="text-xs text-brand-primary hover:text-indigo-400 font-medium transition-colors"
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold transition-colors hover:underline"
                   >
                     Forgot Password?
                   </button>
                 </div>
-                <input
-                  type="password"
-                  required
-                  placeholder="••••••••"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  className="bg-slate-950/80 border border-brand-border rounded-xl p-3 text-white focus:outline-none focus:border-brand-primary"
-                />
+                
+                <div className="relative flex items-center">
+                  <input
+                    type={showLoginPassword ? 'text' : 'password'}
+                    required
+                    placeholder="••••••••"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 rounded-xl pl-3.5 pr-11 py-3 text-white placeholder:text-slate-600 transition-all outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPassword(!showLoginPassword)}
+                    className="absolute right-3.5 text-slate-400 hover:text-indigo-400 transition-colors p-1"
+                    title={showLoginPassword ? "Hide password" : "Show password"}
+                  >
+                    {showLoginPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
 
               <button
                 type="submit"
                 disabled={authLoading}
-                className="mt-4 bg-brand-primary hover:bg-indigo-500 disabled:opacity-50 text-white font-medium p-3.5 rounded-xl shadow-lg shadow-brand-primary/20 transition-all flex items-center justify-center gap-2"
+                className="mt-3 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 text-white font-semibold p-3.5 rounded-xl shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2 text-sm"
               >
                 {authLoading ? (
                   <>
@@ -1491,6 +1843,13 @@ function App() {
               </button>
             </form>
           )}
+
+          {/* Security Footer Badge */}
+          <div className="pt-2 text-center border-t border-slate-800/80 flex items-center justify-center gap-2 text-[10px] text-slate-500">
+            <ShieldCheck className="h-3.5 w-3.5 text-indigo-400" />
+            <span>256-Bit SSL Encrypted • Single-Use Token Security</span>
+          </div>
+
         </div>
 
       </div>

@@ -11,11 +11,14 @@ COPY . .
 
 RUN npm run build
 
-# Stage 2: Serve built static files using Nginx
+# Stage 2: Serve built static files using Nginx with SPA routing support
 FROM nginx:alpine
 
-# Copy custom Nginx configuration if needed, or default static location
+# Copy built static files
 COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Copy custom Nginx configuration for React SPA client-side routing
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 

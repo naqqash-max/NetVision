@@ -130,3 +130,52 @@ docker exec netvision_backend rm -rf tests
 *   **Role Gating**: Strict endpoint verification on the FastAPI layer via `require_admin` and `require_operator` dependencies.
 *   **Password Hashing**: Passwords are saved inside the database using salted `bcrypt` hashes; raw passwords are never returned or logged.
 *   **Stateful Audit Trails**: All state changes (device creation, threshold alterations, manual diagnostic executions, configuration changes) log the user, operation details, client IP address, and timestamp.
+
+---
+
+## 📧 Password Recovery & SMTP Configuration
+
+NetVision includes a production-grade password recovery system utilizing cryptographically secure single-use reset tokens and customizable HTML/Text email notifications.
+
+### Security Model
+* **Token Generation**: Uses 32-byte cryptographically secure random strings (`secrets.token_urlsafe(32)`).
+* **Token Storage**: Only SHA-256 token hashes are saved to PostgreSQL (`password_reset_tokens` table); raw tokens are **never** logged or stored in the database.
+* **Expiration & Single-Use**: Tokens expire automatically after 15 minutes (`RESET_TOKEN_EXPIRE_MINUTES`) and are invalidated upon first usage. Requesting a new reset token invalidates prior active tokens.
+* **Account Enumeration Protection**: The `POST /api/v1/auth/forgot-password` endpoint returns an identical generic response (`"If an account exists for this email, a password reset link has been sent."`) regardless of whether the target email exists.
+
+### Environment Variables & SMTP Setup
+
+| Variable | Description | Development Default | Production Example |
+| :--- | :--- | :--- | :--- |
+| `SMTP_HOST` | SMTP server address | `mailpit` | `smtp.sendgrid.net` / `smtp.gmail.com` |
+| `SMTP_PORT` | SMTP port | `1025` | `587` (TLS) / `465` (SSL) |
+| `SMTP_USERNAME` | SMTP authentication username | *(empty)* | `apikey` / `user@example.com` |
+| `SMTP_PASSWORD` | SMTP authentication password | *(empty)* | `your-secret-smtp-password` |
+| `SMTP_FROM_EMAIL` | Sender email address | `noreply@netvision.local` | `noreply@yourdomain.com` |
+| `SMTP_TLS` | Enable STARTTLS | `false` | `true` |
+| `SMTP_SSL` | Enable SSL connection | `false` | `false` |
+| `EMAIL_ENABLED` | Toggle email delivery | `true` | `true` |
+| `FRONTEND_URL` | Public Web Portal URL | `http://localhost:3000` | `https://netvision.yourdomain.com` |
+
+### Development Mode (Mailpit)
+In development, emails are routed internally to the Mailpit container (`mailpit:1025`). Developers can inspect received HTML/Text emails at:
+* **Mailpit Web UI**: [http://localhost:8025](http://localhost:8025)
+
+---
+
+## 🖥️ Windows Desktop Application
+
+NetVision can be packaged as a standalone local Windows desktop application (`NetVision.exe`), running a local PostgreSQL instance, FastAPI backend, and networking engine completely self-contained on loopback `127.0.0.1`.
+
+### Build & Package Instructions:
+1. Ensure **Node.js** and **npm** are installed on the host.
+2. Open Command Prompt/PowerShell as **Administrator**.
+3. Run the master compiler script:
+   ```cmd
+   build-windows.bat
+   ```
+4. The standalone packaged folder will be generated at `desktop/dist/NetVision/`.
+5. Run the application launcher by double-clicking `desktop/dist/NetVision/NetVision.exe`.
+6. To compile a single-file installation package (`NetVision-Setup.exe`), open `desktop/netvision.iss` inside **Inno Setup** and select compile.
+
+For full architectural blueprints, packaging options, and local troubleshooting, refer to the [DESKTOP_BUILD.md](file:///C:/Users/Naqqash/.gemini/antigravity/brain/f4cdcd76-a899-44ee-a4a7-6af716fa17cd/desktop_build.md) artifact.

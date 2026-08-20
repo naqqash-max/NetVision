@@ -27,7 +27,14 @@ def create_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    """Register a new user (ADMIN only)."""
+    """Register/Invite a new user (ADMIN only)."""
+    import secrets
+    from datetime import datetime, timezone, timedelta
+    from app.core.config import settings
+    from app.core.security import generate_reset_token, hash_reset_token
+    from app.models.password_reset import PasswordResetToken
+    from app.services.email_service import send_password_reset_email
+
     # Check if email exists
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -36,10 +43,11 @@ def create_user(
     if payload.username and db.query(User).filter(User.username == payload.username).first():
         raise HTTPException(status_code=400, detail="Username already taken")
         
-    hashed = get_password_hash(payload.password)
+    initial_password = payload.password or secrets.token_urlsafe(16)
+    hashed = get_password_hash(initial_password)
     new_user = User(
         email=payload.email,
-        username=payload.username,
+        username=payload.username or payload.email.split("@")[0],
         hashed_password=hashed,
         full_name=payload.full_name,
         role=payload.role,
@@ -49,6 +57,26 @@ def create_user(
     db.commit()
     db.refresh(new_user)
     
+    # If send_invite requested or no password provided, issue an onboarding password reset token & email
+    if payload.send_invite or not payload.password:
+        now = datetime.now(timezone.utc)
+        raw_token = generate_reset_token()
+        token_hash = hash_reset_token(raw_token)
+        expires_at = now + timedelta(minutes=settings.RESET_TOKEN_EXPIRE_MINUTES)
+
+        reset_token_obj = PasswordResetToken(
+            user_id=new_user.id,
+            token_hash=token_hash,
+            expires_at=expires_at
+        )
+        db.add(reset_token_obj)
+        db.commit()
+
+        try:
+            send_password_reset_email(email=new_user.email, reset_token=raw_token)
+        except Exception:
+            pass
+
     # Log audit event
     client_ip = request.client.host if request.client else None
     log_audit_event(

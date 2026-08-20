@@ -72,7 +72,7 @@ def ping_one(dest_addr, timeout=1.0, seq=1, packet_id=None):
             icmp_header = rec_packet[20:28]
             type, code, checksum_val, p_id, p_seq = struct.unpack("bbHHh", icmp_header)
             
-            if p_id == packet_id and p_seq == seq and type == 0:
+            if p_id == packet_id and p_seq == seq and type == 0 and addr[0] == dest_addr:
                 return (time_received - start_time) * 1000.0
     finally:
         my_socket.close()

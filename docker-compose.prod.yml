@@ -1,0 +1,94 @@
+services:
+  database:
+    image: postgres:15-alpine
+    container_name: netvision_db_prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-netvision}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} # Required, no default fallback
+    # No ports mapping exposed to the host in production for security.
+    # PostgreSQL is accessible only within the internal docker network.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/1-schema.sql
+    networks:
+      - netvision_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: netvision_backend_prod
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-netvision}
+      - SECRET_KEY=${SECRET_KEY} # Required, no default fallback
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-NetVision Operations Center}
+      - SMTP_TLS=${SMTP_TLS:-true}
+      - SMTP_SSL=${SMTP_SSL:-false}
+      - EMAIL_ENABLED=${EMAIL_ENABLED:-true}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - ENVIRONMENT=production
+    ports:
+      - "8000:8000"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - netvision_network
+
+  networking-engine:
+    build:
+      context: ./networking-engine
+      dockerfile: Dockerfile
+    container_name: netvision_networking_engine_prod
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-netvision}
+      - MONITOR_CONCURRENCY_LIMIT=${MONITOR_CONCURRENCY_LIMIT:-10}
+    depends_on:
+      database:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    networks:
+      - netvision_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: netvision_frontend_prod
+    ports:
+      - "80:80" # Standard HTTP port exposed in production
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - netvision_network
+
+volumes:
+  pgdata:
+
+networks:
+  netvision_network:
+    driver: bridge

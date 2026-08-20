@@ -176,41 +176,71 @@ def get_device_availability_report(
     devices = dev_query.all()
     total_period_hours = max(0.01, (et - st).total_seconds() / 3600.0)
 
+    device_ids = [d.id for d in devices]
+
+    # Query aggregated ping statistics for all devices in the period
+    ping_stats_map = {}
+    if device_ids:
+        from sqlalchemy import case
+        ping_stats = db.query(
+            PingLog.device_id,
+            func.count(PingLog.id).label("total_checks"),
+            func.sum(case((PingLog.is_online == True, 1), else_=0)).label("online_checks"),
+            func.avg(PingLog.latency_ms).label("avg_latency"),
+            func.avg(PingLog.packet_loss_pct).label("avg_loss")
+        ).filter(
+            PingLog.device_id.in_(device_ids),
+            PingLog.timestamp >= st,
+            PingLog.timestamp <= et
+        ).group_by(PingLog.device_id).all()
+
+        ping_stats_map = {
+            row.device_id: {
+                "total_checks": row.total_checks,
+                "online_checks": row.online_checks or 0,
+                "avg_latency": row.avg_latency,
+                "avg_loss": row.avg_loss
+            }
+            for row in ping_stats
+        }
+
+    # Query aggregated incident counts for all devices in the period
+    alert_stats_map = {}
+    if device_ids:
+        alert_stats = db.query(
+            Alert.device_id,
+            func.count(Alert.id).label("incident_count")
+        ).filter(
+            Alert.device_id.in_(device_ids),
+            Alert.created_at >= st,
+            Alert.created_at <= et
+        ).group_by(Alert.device_id).all()
+
+        alert_stats_map = {row.device_id: row.incident_count for row in alert_stats}
+
     items: List[DeviceAvailabilityItem] = []
     total_avail_sum = 0.0
 
     for dev in devices:
-        ping_rows = db.query(PingLog).filter(
-            PingLog.device_id == dev.id,
-            PingLog.timestamp >= st,
-            PingLog.timestamp <= et
-        ).all()
-
-        total_checks = len(ping_rows)
-        online_checks = sum(1 for p in ping_rows if p.is_online)
-        offline_checks = total_checks - online_checks
-
-        if total_checks > 0:
+        stats = ping_stats_map.get(dev.id)
+        if stats:
+            total_checks = stats["total_checks"]
+            online_checks = stats["online_checks"]
+            offline_checks = total_checks - online_checks
             avail_pct = round((online_checks / total_checks) * 100.0, 2)
-            latencies = [p.latency_ms for p in ping_rows if p.latency_ms is not None]
-            avg_lat = round(sum(latencies) / len(latencies), 2) if latencies else None
-            losses = [p.packet_loss_pct for p in ping_rows if p.packet_loss_pct is not None]
-            avg_loss = round(sum(losses) / len(losses), 2) if losses else None
+            avg_lat = round(stats["avg_latency"], 2) if stats["avg_latency"] is not None else None
+            avg_loss = round(stats["avg_loss"], 2) if stats["avg_loss"] is not None else None
         else:
-            # Fallback to device current status if no ping checks in window
+            total_checks = 0
+            online_checks = 0
+            offline_checks = 0
             avail_pct = 100.0 if dev.status == "online" else (50.0 if dev.status == "degraded" else 0.0)
             avg_lat = None
             avg_loss = 0.0 if dev.status == "online" else 100.0
 
         online_hours = round((avail_pct / 100.0) * total_period_hours, 2)
         offline_hours = round(total_period_hours - online_hours, 2)
-
-        # Count incidents in range
-        incidents = db.query(Alert).filter(
-            Alert.device_id == dev.id,
-            Alert.created_at >= st,
-            Alert.created_at <= et
-        ).count()
+        incidents = alert_stats_map.get(dev.id, 0)
 
         total_avail_sum += avail_pct
 
@@ -344,6 +374,38 @@ def get_icmp_report(
 
     devices = dev_q.all()
 
+    device_ids = [d.id for d in devices]
+
+    # Query aggregated ping statistics for all devices in the period
+    ping_stats_map = {}
+    if device_ids:
+        from sqlalchemy import case
+        ping_stats = db.query(
+            PingLog.device_id,
+            func.count(PingLog.id).label("check_count"),
+            func.sum(case((PingLog.is_online == True, 1), else_=0)).label("online_count"),
+            func.avg(PingLog.latency_ms).label("avg_latency"),
+            func.min(func.coalesce(PingLog.min_latency, PingLog.latency_ms)).label("min_latency"),
+            func.max(func.coalesce(PingLog.max_latency, PingLog.latency_ms)).label("max_latency"),
+            func.avg(PingLog.packet_loss_pct).label("avg_loss")
+        ).filter(
+            PingLog.device_id.in_(device_ids),
+            PingLog.timestamp >= st,
+            PingLog.timestamp <= et
+        ).group_by(PingLog.device_id).all()
+
+        ping_stats_map = {
+            row.device_id: {
+                "check_count": row.check_count,
+                "online_count": row.online_count or 0,
+                "avg_latency": row.avg_latency,
+                "min_latency": row.min_latency,
+                "max_latency": row.max_latency,
+                "avg_loss": row.avg_loss
+            }
+            for row in ping_stats
+        }
+
     items: List[IcmpReportItem] = []
     all_latencies = []
     all_losses = []
@@ -351,34 +413,22 @@ def get_icmp_report(
     total_online_checks = 0
 
     for dev in devices:
-        pings = db.query(PingLog).filter(
-            PingLog.device_id == dev.id,
-            PingLog.timestamp >= st,
-            PingLog.timestamp <= et
-        ).all()
-
-        check_count = len(pings)
-        total_checks_sum += check_count
-
-        if check_count > 0:
-            online_count = sum(1 for p in pings if p.is_online)
+        stats = ping_stats_map.get(dev.id)
+        if stats:
+            check_count = stats["check_count"]
+            online_count = stats["online_count"]
+            total_checks_sum += check_count
             total_online_checks += online_count
             avail_pct = round((online_count / check_count) * 100.0, 2)
-
-            lats = [p.latency_ms for p in pings if p.latency_ms is not None]
-            min_lats = [p.min_latency for p in pings if p.min_latency is not None] or lats
-            max_lats = [p.max_latency for p in pings if p.max_latency is not None] or lats
-
-            avg_lat = round(sum(lats) / len(lats), 2) if lats else None
-            min_lat = round(min(min_lats), 2) if min_lats else None
-            max_lat = round(max(max_lats), 2) if max_lats else None
-
-            losses = [p.packet_loss_pct for p in pings if p.packet_loss_pct is not None]
-            avg_loss = round(sum(losses) / len(losses), 2) if losses else None
+            avg_lat = round(stats["avg_latency"], 2) if stats["avg_latency"] is not None else None
+            min_lat = round(stats["min_latency"], 2) if stats["min_latency"] is not None else None
+            max_lat = round(stats["max_latency"], 2) if stats["max_latency"] is not None else None
+            avg_loss = round(stats["avg_loss"], 2) if stats["avg_loss"] is not None else None
 
             if avg_lat: all_latencies.append(avg_lat)
             if avg_loss is not None: all_losses.append(avg_loss)
         else:
+            check_count = 0
             avail_pct = 100.0 if dev.status == "online" else 0.0
             avg_lat = None
             min_lat = None

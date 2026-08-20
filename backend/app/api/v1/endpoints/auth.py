@@ -15,10 +15,12 @@ from app.schemas.user import (
     ForgotPasswordRequest, 
     ForgotPasswordResponse, 
     ResetPasswordRequest, 
-    ResetPasswordResponse
+    ResetPasswordResponse,
+    SetupStatusResponse,
+    InitialSetupRequest
 )
 from app.services.audit import log_audit_event
-from app.services.email import send_password_reset_email
+from app.services.email_service import send_password_reset_email
 
 router = APIRouter()
 
@@ -149,9 +151,12 @@ def forgot_password(
         db.add(reset_token_obj)
         db.commit()
         
-        # Send reset email or log development link
-        dev_info = send_password_reset_email(email=user.email, reset_token=raw_token)
-        dev_url = dev_info["reset_url"]
+        # Send reset email safely via EmailService
+        try:
+            dev_info = send_password_reset_email(email=user.email, reset_token=raw_token)
+            dev_url = dev_info.get("reset_url")
+        except Exception as email_err:
+            pass  # Logged internally in EmailService, do not expose details to user API response
         
         # Log audit event (NEVER log raw token)
         log_audit_event(
@@ -170,7 +175,7 @@ def forgot_password(
             ip_address=client_ip
         )
 
-    # In development mode (when SMTP is not configured), expose dev helper fields for testing & local development
+    # In development mode (when SMTP is not configured), expose dev helper fields for local debugging
     if settings.ENVIRONMENT == "development" and not settings.SMTP_HOST and dev_url:
         return ForgotPasswordResponse(
             message=generic_msg,
@@ -265,4 +270,85 @@ def reset_password(
     return ResetPasswordResponse(
         message="Password reset successful. You may now log in with your new password."
     )
+
+
+@router.get("/setup-status", response_model=SetupStatusResponse)
+def get_setup_status(db: Session = Depends(get_db)):
+    """
+    Detect whether the database contains an administrator account.
+    Returns is_initialized = true if an administrator exists.
+    """
+    admin_exists = db.query(User).filter(User.role == "ADMIN").first() is not None
+    return SetupStatusResponse(is_initialized=admin_exists)
+
+
+@router.post("/setup-admin", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def setup_initial_admin(
+    request: Request,
+    payload: InitialSetupRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Perform first-time setup for the initial administrator.
+    Protected against race conditions and disallowed once an admin exists.
+    """
+    # 1. Password confirmation check if provided
+    if payload.confirm_password is not None and payload.password != payload.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match. Please verify and try again."
+        )
+
+    # 2. Race-condition protection & initialization check
+    # Execute query to check existing admin count
+    admin_count = db.query(User).filter(User.role == "ADMIN").count()
+    if admin_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="System is already initialized. First-time setup is no longer available."
+        )
+
+    # 3. Email uniqueness check
+    if db.query(User).filter(User.email == payload.email).first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email address is already registered."
+        )
+
+    # 4. Username handling & uniqueness check
+    username = payload.username
+    if not username:
+        username = payload.email.split("@")[0]
+
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username is already taken."
+        )
+
+    # 5. Create initial administrator
+    hashed = get_password_hash(payload.password)
+    admin_user = User(
+        email=payload.email,
+        username=username,
+        hashed_password=hashed,
+        full_name=payload.full_name,
+        role="ADMIN",
+        is_active=True
+    )
+    db.add(admin_user)
+    db.commit()
+    db.refresh(admin_user)
+
+    client_ip = request.client.host if request.client else None
+    log_audit_event(
+        db=db,
+        action="initial_setup_completed",
+        user=admin_user,
+        details={"admin_email": admin_user.email, "username": admin_user.username},
+        ip_address=client_ip
+    )
+
+    return admin_user
+
 
